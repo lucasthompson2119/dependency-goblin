@@ -70,10 +70,10 @@ publish-nexus:
         echo "No commit tag provided. Skipping publish."
         exit 0
       else
-        npm config set registry "https://nexus.swf.army.mil/repository/tesseract-packages" --verbose
+        npm config set registry "https://nexus.swf.army.mil/repository/tesseract-frontend-packages" --verbose
         # even if you change to using yarn to publish, use npm config set for the next line. Doesnt make sense but needs npm not yarn or it wont work.
-        npm config set "//nexus.swf.army.mil/repository/tesseract-packages/:_auth=${NEXUS_TESSERACT_PUBLISH}" 
+        npm config set "//nexus.swf.army.mil/repository/tesseract-frontend-packages/:_auth=${NEXUS_TESSERACT_PUBLISH}" 
         ls -lah  
         cd dist
-        npm publish --registry https://nexus.swf.army.mil/repository/tesseract-packages/  
+        npm publish --registry https://nexus.swf.army.mil/repository/tesseract-frontend-packages/  
       fi
