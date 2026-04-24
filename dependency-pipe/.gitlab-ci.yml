@@ -1,0 +1,308 @@
+# =============================================================================
+# .gitlab-ci.yml
+# Pipeline includes:
+#   - Standard test / build / publish workflow
+#   - Daily vulnerability scan (yarn.lock + gradle.lockfile)
+#   - Auto-remediation: upgrade deps → lint → build → test → open MR
+# =============================================================================
+ 
+# -----------------------------------------------------------------------------
+# REQUIRED CI/CD VARIABLES (Settings → CI/CD → Variables)
+# -----------------------------------------------------------------------------
+# GL_PAT              Personal Access Token (api + write_repository scopes) [masked]
+# ASSIGNEE_USER_ID    GitLab numeric user ID to assign the auto-fix MR to
+# -----------------------------------------------------------------------------
+ 
+stages:
+  # - test
+  # - build
+  # - publish
+  # - scan
+  - check
+  - auto-fix
+  - fix-lint
+  - fix-build
+  - fix-test
+  - merge-request
+ 
+# =============================================================================
+# STANDARD WORKFLOW — test / build / publish
+# These run on every push/MR. Skipped on scheduled pipelines.
+# =============================================================================
+ 
+# frontend:test:
+#   stage: test
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE != "schedule"'
+#   script:
+#     - cd frontend
+#     - yarn install --frozen-lockfile
+#     - yarn test
+ 
+# backend:test:
+#   stage: test
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE != "schedule"'
+#   script:
+#     - ./gradlew test
+ 
+# frontend:build:
+#   stage: build
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE != "schedule"'
+#   needs:
+#     - frontend:test
+#   script:
+#     - cd frontend
+#     - yarn install --frozen-lockfile
+#     - yarn build
+#   artifacts:
+#     paths:
+#       - frontend/dist/
+#     expire_in: 1 day
+ 
+# backend:build:
+#   stage: build
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE != "schedule"'
+#   needs:
+#     - backend:test
+#   script:
+#     - ./gradlew -x test build
+#   artifacts:
+#     paths:
+#       - build/libs/
+#     expire_in: 1 day
+ 
+# frontend:publish:
+#   stage: publish
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE != "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+#   needs:
+#     - frontend:build
+#   script:
+#     - cd frontend
+#     - yarn publish
+ 
+# backend:publish:
+#   stage: publish
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE != "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+#   needs:
+#     - backend:build
+#   script:
+#     - ./gradlew publish
+ 
+# =============================================================================
+# VULNERABILITY SCAN — runs daily via CI/CD → Schedules
+# Schedule cron: 30 15 * * *  (9:30 AM CST / 14:30 UTC — adjust for CDT)
+# No additional variables needed on this schedule.
+# =============================================================================
+ 
+# dependency:scan:
+#   stage: scan
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE == "schedule" && $HEARTBEAT == null'
+#   image: registry.gitlab.com/security-products/dependency-scanning:latest
+#   variables:
+#     DS_EXCLUDED_ANALYZERS: ""
+#   script:
+#     - /analyzer run
+#   artifacts:
+#     reports:
+#       dependency_scanning: gl-dependency-scanning-report.json
+#     paths:
+#       - gl-dependency-scanning-report.json
+#     expire_in: 7 days
+ 
+# =============================================================================
+# CHECK — parse scan report and set VULNERABILITIES_FOUND flag
+# =============================================================================
+ 
+check:vulnerabilities:
+  stage: check
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $HEARTBEAT == null'
+  needs:
+    - dependency:scan
+  script:
+    - |
+      VULN_COUNT=$(python3 -c "
+      import json, sys
+ 
+      with open('gl-dependency-scanning-report.json') as f:
+          report = json.load(f)
+ 
+      # Filter to Critical and High only — adjust severities as needed
+      target_severities = {'Critical', 'High'}
+      vulns = [
+          v for v in report.get('vulnerabilities', [])
+          if v.get('severity') in target_severities
+      ]
+ 
+      print(len(vulns))
+ 
+      # Print a summary for the job log
+      for v in vulns:
+          print(f\"  [{v.get('severity')}] {v.get('name')} — {v.get('location', {}).get('file', 'unknown file')}\", file=sys.stderr)
+      ")
+ 
+      echo "Critical/High vulnerabilities found: $VULN_COUNT"
+ 
+      if [ "$VULN_COUNT" -gt "0" ]; then
+        echo "VULNERABILITIES_FOUND=true" >> vuln.env
+      else
+        echo "No critical/high vulnerabilities detected. Skipping remediation."
+        echo "VULNERABILITIES_FOUND=false" >> vuln.env
+      fi
+  artifacts:
+    reports:
+      dotenv: vuln.env
+    expire_in: 1 day
+ 
+# =============================================================================
+# AUTO-FIX — create branch, upgrade yarn + gradle deps, commit and push
+#
+# Both package managers are handled in a single job to avoid git conflicts
+# that would occur if yarn and gradle jobs ran in parallel and both tried
+# to commit to the same branch.
+# =============================================================================
+ 
+auto:fix:
+  stage: auto-fix
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+  needs:
+    - check:vulnerabilities
+  before_script:
+    - git config user.email "gitlab-ci@${CI_SERVER_HOST}"
+    - git config user.name "GitLab CI Auto-Fix"
+    - git remote set-url origin "https://oauth2:${GL_PAT}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - git fetch origin
+    - git checkout -b "auto-fix/vuln-remediation-${CI_PIPELINE_ID}" "origin/${CI_DEFAULT_BRANCH}"
+  script:
+    # --- Frontend: yarn upgrade ---
+    - echo "=== Upgrading yarn dependencies ==="
+    - cd frontend
+    - yarn upgrade
+    - cd ..
+    - git add frontend/yarn.lock frontend/package.json
+    - git diff --cached --quiet || git commit -m "fix(frontend): auto-upgrade yarn dependencies [skip ci]"
+ 
+    # --- Backend: gradle refresh ---
+    - echo "=== Refreshing gradle dependencies ==="
+    - ./gradlew --refresh-dependencies dependencies
+    # If using gradle dependency locking, regenerate the lockfile
+    - ./gradlew dependencies --write-locks
+    - git add gradle.lockfile
+    - git diff --cached --quiet || git commit -m "fix(backend): auto-refresh gradle lockfile [skip ci]"
+ 
+    # Push the branch so subsequent jobs can use it
+    - git push origin "auto-fix/vuln-remediation-${CI_PIPELINE_ID}"
+ 
+    # Export branch name for downstream jobs
+    - echo "FIX_BRANCH=auto-fix/vuln-remediation-${CI_PIPELINE_ID}" >> fix_branch.env
+  artifacts:
+    # Pass the built source to lint/build/test jobs
+    paths:
+      - frontend/
+      - "**/*.gradle"
+      - "**/*.lockfile"
+      - gradle/
+    reports:
+      dotenv: fix_branch.env
+    expire_in: 1 day
+ 
+# =============================================================================
+# LINT — run after fix, only if vulnerabilities were found
+# =============================================================================
+ 
+fix:lint:
+  stage: fix-lint
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+  needs:
+    - auto:fix
+  script:
+    - echo "=== Linting frontend ==="
+    - cd frontend
+    - yarn install
+    - yarn lint
+    - cd ..
+    - echo "=== Linting backend ==="
+    - ./gradlew checkstyleMain checkstyleTest
+ 
+# =============================================================================
+# BUILD — run after lint passes
+# =============================================================================
+ 
+fix:build:
+  stage: fix-build
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+  needs:
+    - fix:lint
+  script:
+    - echo "=== Building frontend ==="
+    - cd frontend
+    - yarn build
+    - cd ..
+    - echo "=== Building backend ==="
+    - ./gradlew -x test build
+  artifacts:
+    paths:
+      - frontend/dist/
+      - build/libs/
+    expire_in: 1 day
+ 
+# =============================================================================
+# TEST — run after build passes
+# =============================================================================
+ 
+fix:test:
+  stage: fix-test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+  needs:
+    - fix:build
+  script:
+    - echo "=== Testing frontend ==="
+    - cd frontend
+    - yarn test
+    - cd ..
+    - echo "=== Testing backend ==="
+    - ./gradlew test
+ 
+# =============================================================================
+# MERGE REQUEST — only created if ALL of lint / build / test pass
+# =============================================================================
+ 
+create:merge-request:
+  stage: merge-request
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+  needs:
+    - fix:test
+  script:
+    - |
+      echo "Creating merge request for branch: $FIX_BRANCH"
+ 
+      RESPONSE=$(curl --silent --show-error \
+        --request POST \
+        --header "PRIVATE-TOKEN: ${GL_PAT}" \
+        --header "Content-Type: application/json" \
+        --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
+        --data "{
+          \"source_branch\": \"${FIX_BRANCH}\",
+          \"target_branch\": \"${CI_DEFAULT_BRANCH}\",
+          \"title\": \"fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})\",
+          \"description\": \"## Automated Vulnerability Remediation\n\nThis MR was automatically created by pipeline [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL}) after the daily dependency scan detected critical or high CVEs.\n\n### Changes\n- \`frontend/yarn.lock\` — upgraded via \`yarn upgrade\`\n- \`gradle.lockfile\` — refreshed via \`./gradlew --refresh-dependencies\`\n\n### Validation\n- ✅ Lint passed\n- ✅ Build passed\n- ✅ Tests passed\n\nPlease review the dependency changes before merging.\",
+          \"assignee_id\": ${ASSIGNEE_USER_ID},
+          \"labels\": \"security,automated,dependencies\",
+          \"remove_source_branch\": true
+        }")
+ 
+      echo "$RESPONSE"
+ 
+      MR_URL=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('web_url', 'URL not found'))")
+      echo "Merge request created: $MR_URL"
