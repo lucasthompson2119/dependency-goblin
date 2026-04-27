@@ -24,6 +24,7 @@
 # =============================================================================
 variables:
   DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
+  CI_BASE_IMAGE_JDK_17: "$CI_BASE_IMAGE_JDK_17"
 
 stages:
   - check
