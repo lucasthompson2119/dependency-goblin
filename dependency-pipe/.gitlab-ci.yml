@@ -45,7 +45,7 @@ check:vulnerabilities:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
-    - project: "$CI_PROJECT_NAMESPACE"/"$CI_PROJECT_NAME"
+    - project: "$CI_PROJECT_NAME"
       job: dependency-scanning
       ref: main
       artifacts: true
