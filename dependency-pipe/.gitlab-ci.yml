@@ -51,13 +51,13 @@ check:vulnerabilities:
   #     artifacts: true
 
   script:
+    - sleep 3600
     - curl --request GET \
       --location \
       --header "PRIVATE-TOKEN:$PLATFORM_VULCAN_TOKEN" \
       --url "https://gitlab.vulcan.mil/army-software-factory/environments/inner-source/tesseract/tesseract-packages/frontend/px-migration-banner/-/jobs/2494029/artifacts/download?file_type=dependency_scanning \
       --output gl-dependency-scanning-report.json
     - |
-      sleep 3600
       python3 << 'EOF'
       import json
 
