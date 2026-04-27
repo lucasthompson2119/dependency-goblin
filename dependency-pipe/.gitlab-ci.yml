@@ -115,7 +115,8 @@ auto:fix:
   rules:
     - if: '$VULNERABILITIES_FOUND == "true"'
   needs:
-    - check:vulnerabilities
+    - job: check:vulnerabilities
+      artifacts: true
   before_script:
     - git config user.email "gitlab-ci@${CI_SERVER_HOST}"
     - git config user.name "GitLab CI Auto-Fix"
