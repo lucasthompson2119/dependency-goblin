@@ -53,11 +53,11 @@ check:vulnerabilities:
   script:
     - curl --location https://gitlab.vulcan.mil/army-software-factory/environments/inner-source/tesseract/tesseract-packages/frontend/px-migration-banner/-/jobs/2494029/artifacts/download?file_type=dependency_scanning --output gl-dependency-scanning-report.json
     - |
-      python3 -V
+      sleep 3600
       python3 << 'EOF'
       import json
 
-      with open('gl-dependency-scanning-report.json', 'r') as f:
+      with open('gl-dependency-scanning-report.json') as f:
           report = json.load(f)
 
       target_severities = {'Critical', 'High', 'Medium', 'Low'}
