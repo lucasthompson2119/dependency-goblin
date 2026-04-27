@@ -57,7 +57,7 @@ check:vulnerabilities:
       python3 << 'EOF'
       import json
 
-      with open('gl-dependency-scanning-report.json') as f:
+      with open('gl-dependency-scanning-report.json', 'r') as f:
           report = json.load(f)
 
       target_severities = {'Critical', 'High', 'Medium', 'Low'}
