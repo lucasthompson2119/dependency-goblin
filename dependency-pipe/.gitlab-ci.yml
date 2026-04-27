@@ -110,6 +110,8 @@ check:vulnerabilities:
 # =============================================================================
 
 auto:fix:
+  variables:
+    GIT_STRATEGY: fetch
   stage: auto-fix
   tags:
     - px-app-build
