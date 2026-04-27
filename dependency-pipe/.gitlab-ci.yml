@@ -22,8 +22,6 @@
 #   GL_PAT             Personal Access Token (api + write_repository scopes) [masked]
 #   ASSIGNEE_USER_ID   GitLab numeric user ID to assign the MR to
 # =============================================================================
-variables:
-  VULCAN_TOKEN: $VULCAN_TOKEN
 
 stages:
   - check
@@ -46,19 +44,14 @@ check:vulnerabilities:
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
-  # needs:
-  #   - project: "$CI_PROJECT_NAME"
-  #     job: "dependency-scanning"
-  #     ref: main
-  #     artifacts: true
+  needs:
+    - project: "$CI_PROJECT_NAME"
+      job: "dependency_scanning"
+      ref: main
+      artifacts: true
 
   script:
     - sleep 3600
-    - curl --request GET \
-      --location \
-      --header "PRIVATE-TOKEN:$VULCAN_TOKEN" \
-      --url "https://gitlab.vulcan.mil/army-software-factory/environments/inner-source/tesseract/tesseract-packages/frontend/px-migration-banner/-/jobs/2494029/artifacts/download?file_type=dependency_scanning" \
-      --output gl-dependency-scanning-report.json
     - |
       python3 << 'EOF'
       import json
