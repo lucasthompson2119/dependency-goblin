@@ -22,6 +22,8 @@
 #   GL_PAT             Personal Access Token (api + write_repository scopes) [masked]
 #   ASSIGNEE_USER_ID   GitLab numeric user ID to assign the MR to
 # =============================================================================
+variables:
+  PLATFORM_VULCAN_TOKEN: $PLATFORM_VULCAN_TOKEN
 
 stages:
   - check
