@@ -118,6 +118,9 @@ auto:fix:
     - job: check:vulnerabilities
       artifacts: true
   before_script:
+    - pwd
+    - ls -alh
+    - env | grep GIT
     - git config user.email "DEPENDENCY_SAVIOR@vulcan.mil"
     - git config user.name "Dependency Savior"
     - git remote set-url origin "https://oauth2:"$DEPENDENCY_SAVIOR_TOKEN"@"$CI_SERVER_HOST"/"$CI_PROJECT_PATH".git"
