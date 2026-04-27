@@ -24,12 +24,10 @@
 # =============================================================================
 variables:
   DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
-  CI_BASE_IMAGE_JDK_17: "$CI_BASE_IMAGE_JDK_17"
 
 stages:
   - check
-  - auto-fix-frontend
-  - auto-fix-backend
+  - auto-fix
   - trigger-validation
   # - merge-request
 
@@ -129,7 +127,7 @@ check:vulnerabilities:
       #
 
 auto:fix-frontend:
-  stage: auto-fix-frontend
+  stage: auto-fix
   extends: .node
   needs:
     - job: check:vulnerabilities
@@ -217,7 +215,7 @@ auto:fix-frontend:
     - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
 
 auto:fix-backend:
-  stage: auto-fix-backend
+  stage: auto-fix
   extends: .gradle
   needs:
     - job: check:vulnerabilities
