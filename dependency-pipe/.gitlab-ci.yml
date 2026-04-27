@@ -107,85 +107,97 @@ check:vulnerabilities:
 # before the branch is pushed.
 # =============================================================================
 
-# auto:fix:
-#   stage: auto-fix
-#   rules:
-#     - if: '$VULNERABILITIES_FOUND == "true"'
-#   needs:
-#     - check:vulnerabilities
-#   before_script:
-#     - git config user.email "gitlab-ci@${CI_SERVER_HOST}"
-#     - git config user.name "GitLab CI Auto-Fix"
-#     - git remote set-url origin "https://oauth2:${GL_PAT}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-#     - git fetch origin
-#     - git checkout -b "auto-fix/vuln-remediation-${CI_PIPELINE_ID}" "origin/${CI_DEFAULT_BRANCH}"
-#   script:
-#     # --- frontend/yarn.lock ---
-#     - |
-#       if [ "$FIX_FRONTEND" = "true" ]; then
-#         echo "=== Upgrading + linting frontend ==="
-#         cd frontend
-#         yarn upgrade
-#         yarn lint
-#         cd ..
-#         git add frontend/yarn.lock frontend/package.json
-#         git diff --cached --quiet || git commit -m "fix(frontend): auto-upgrade yarn dependencies [skip ci]"
-#       else
-#         echo "--- Skipping frontend (no CVEs in frontend/yarn.lock) ---"
-#       fi
+auto:fix:
+  stage: auto-fix
+  rules:
+    - if: '$VULNERABILITIES_FOUND == "true"'
+  needs:
+    - check:vulnerabilities
+  before_script:
+    - git config user.email "gitlab-ci@${CI_SERVER_HOST}"
+    - git config user.name "GitLab CI Auto-Fix"
+    - git remote set-url origin "https://oauth2:${GL_PAT}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - git fetch origin
+    - git checkout -b "auto-fix/vuln-remediation-${CI_PIPELINE_ID}" "origin/${CI_DEFAULT_BRANCH}"
+  script:
+    # --- yarn.lock ---
+    - |
+      if [ "$FIX_FRONTEND_PACKAGE" = "true" ]; then
+        echo "=== Upgrading + linting frontend ==="
+        yarn upgrade
+        yarn lint
+        git add yarn.lock package.json
+        git diff --cached --quiet || git commit -m "fix(frontend_package): auto-upgrade yarn dependencies [skip ci]"
+      else
+        echo "--- Skipping frontend (no CVEs in yarn.lock) ---"
+      fi
 
-#     # --- journey/yarn.lock ---
-#     - |
-#       if [ "$FIX_JOURNEY" = "true" ]; then
-#         echo "=== Upgrading + linting journey ==="
-#         cd journey
-#         yarn upgrade
-#         yarn lint
-#         cd ..
-#         git add journey/yarn.lock journey/package.json
-#         git diff --cached --quiet || git commit -m "fix(journey): auto-upgrade yarn dependencies [skip ci]"
-#       else
-#         echo "--- Skipping journey (no CVEs in journey/yarn.lock) ---"
-#       fi
+    # --- frontend/yarn.lock ---
+    - |
+      if [ "$FIX_FRONTEND" = "true" ]; then
+        echo "=== Upgrading + linting frontend ==="
+        cd frontend
+        yarn upgrade
+        yarn lint
+        cd ..
+        git add frontend/yarn.lock frontend/package.json
+        git diff --cached --quiet || git commit -m "fix(frontend): auto-upgrade yarn dependencies [skip ci]"
+      else
+        echo "--- Skipping frontend (no CVEs in frontend/yarn.lock) ---"
+      fi
 
-#     # --- gradle.lockfile ---
-#     - |
-#       if [ "$FIX_BACKEND" = "true" ]; then
-#         echo "=== Refreshing + linting backend ==="
-#         ./gradlew --refresh-dependencies dependencies
-#         ./gradlew dependencies --write-locks
-#         ./gradlew checkstyleMain checkstyleTest
-#         git add gradle.lockfile
-#         git diff --cached --quiet || git commit -m "fix(backend): auto-refresh gradle lockfile [skip ci]"
-#       else
-#         echo "--- Skipping backend (no CVEs in gradle.lockfile) ---"
-#       fi
+    # --- journey/yarn.lock ---
+    - |
+      if [ "$FIX_JOURNEY" = "true" ]; then
+        echo "=== Upgrading + linting journey ==="
+        cd journey
+        yarn upgrade
+        yarn lint
+        cd ..
+        git add journey/yarn.lock journey/package.json
+        git diff --cached --quiet || git commit -m "fix(journey): auto-upgrade yarn dependencies [skip ci]"
+      else
+        echo "--- Skipping journey (no CVEs in journey/yarn.lock) ---"
+      fi
 
-#     - git push origin "auto-fix/vuln-remediation-${CI_PIPELINE_ID}"
-#     - echo "FIX_BRANCH=auto-fix/vuln-remediation-${CI_PIPELINE_ID}" >> fix_branch.env
-#   artifacts:
-#     reports:
-#       dotenv: fix_branch.env
-#     expire_in: 1 day
+    # --- gradle.lockfile ---
+    - |
+      if [ "$FIX_BACKEND" = "true" ]; then
+        echo "=== Refreshing + linting backend ==="
+        ./gradlew --refresh-dependencies dependencies
+        ./gradlew dependencies --write-locks
+        ./gradlew checkstyleMain checkstyleTest
+        git add gradle.lockfile
+        git diff --cached --quiet || git commit -m "fix(backend): auto-refresh gradle lockfile [skip ci]"
+      else
+        echo "--- Skipping backend (no CVEs in gradle.lockfile) ---"
+      fi
 
-# # =============================================================================
-# # TRIGGER VALIDATION — fire the project's standard pipeline on the fix branch
-# #
-# # This reuses your existing test/build jobs from the centralized include
-# # without redefining them here. strategy: depend causes this job to block
-# # until the downstream pipeline completes, and to inherit its pass/fail.
-# # =============================================================================
+    - git push origin "auto-fix/vuln-remediation-${CI_PIPELINE_ID}"
+    - echo "FIX_BRANCH=auto-fix/vuln-remediation-${CI_PIPELINE_ID}" >> fix_branch.env
+  artifacts:
+    reports:
+      dotenv: fix_branch.env
+    expire_in: 1 day
 
-# trigger:validation:
-#   stage: trigger-validation
-#   rules:
-#     - if: '$VULNERABILITIES_FOUND == "true"'
-#   needs:
-#     - auto:fix
-#   trigger:
-#     project: $CI_PROJECT_PATH       # same project, different branch
-#     branch: $FIX_BRANCH
-#     strategy: depend                # block and mirror pass/fail status
+# =============================================================================
+# TRIGGER VALIDATION — fire the project's standard pipeline on the fix branch
+#
+# This reuses your existing test/build jobs from the centralized include
+# without redefining them here. strategy: depend causes this job to block
+# until the downstream pipeline completes, and to inherit its pass/fail.
+# =============================================================================
+
+trigger:validation:
+  stage: trigger-validation
+  rules:
+    - if: '$VULNERABILITIES_FOUND == "true"'
+  needs:
+    - auto:fix
+  trigger:
+    project: $CI_PROJECT_PATH       # same project, different branch
+    branch: $FIX_BRANCH
+    strategy: depend                # block and mirror pass/fail status
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
