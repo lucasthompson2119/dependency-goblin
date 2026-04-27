@@ -44,7 +44,7 @@ check:vulnerabilities:
   tags:
     - px-app-build
   needs:
-    - job:dependency-scanning
+    - security-scan:dependency-scanning
   script:
     - |
       python3 << 'EOF'
