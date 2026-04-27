@@ -23,7 +23,7 @@
 #   ASSIGNEE_USER_ID   GitLab numeric user ID to assign the MR to
 # =============================================================================
 variables:
-  PLATFORM_VULCAN_TOKEN: $PLATFORM_VULCAN_TOKEN
+  VULCAN_TOKEN: $VULCAN_TOKEN
 
 stages:
   - check
@@ -56,8 +56,8 @@ check:vulnerabilities:
     - sleep 3600
     - curl --request GET \
       --location \
-      --header "PRIVATE-TOKEN:$PLATFORM_VULCAN_TOKEN" \
-      --url "https://gitlab.vulcan.mil/army-software-factory/environments/inner-source/tesseract/tesseract-packages/frontend/px-migration-banner/-/jobs/2494029/artifacts/download?file_type=dependency_scanning \
+      --header "PRIVATE-TOKEN:$VULCAN_TOKEN" \
+      --url "https://gitlab.vulcan.mil/army-software-factory/environments/inner-source/tesseract/tesseract-packages/frontend/px-migration-banner/-/jobs/2494029/artifacts/download?file_type=dependency_scanning" \
       --output gl-dependency-scanning-report.json
     - |
       python3 << 'EOF'
