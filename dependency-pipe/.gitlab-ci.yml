@@ -112,8 +112,6 @@ auto:fix:
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
-  rules:
-    - if: '$VULNERABILITIES_FOUND == "true"'
   needs:
     - job: check:vulnerabilities
       artifacts: true
@@ -124,6 +122,14 @@ auto:fix:
     - git fetch origin
     - git checkout -b "auto-fix/vuln-remediation-${CI_PIPELINE_ID}" "origin/${CI_DEFAULT_BRANCH}"
   script:
+    - |
+      if [ "$VULNERABILITIES_FOUND" != "true" ]; then
+        echo "No vulnerabilities found. Skipping."
+        exit 0
+      fi
+
+      echo "Running auto-fix..."
+      
     # --- yarn.lock ---
     - |
       if [ "$FIX_FRONTEND_PACKAGE" = "true" ]; then
