@@ -22,6 +22,8 @@
 #   GL_PAT             Personal Access Token (api + write_repository scopes) [masked]
 #   ASSIGNEE_USER_ID   GitLab numeric user ID to assign the MR to
 # =============================================================================
+variables:
+  DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
 
 stages:
   - check
@@ -45,9 +47,9 @@ check:vulnerabilities:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
-    - project: $CI_PROJECT_PATH
+    - project: "$CI_PROJECT_PATH"
       job: dependency-scanning
-      ref: $CI_COMMIT_REF_NAME
+      ref: "$CI_COMMIT_REF_NAME"
       artifacts: true
 
   script:
@@ -116,11 +118,11 @@ auto:fix:
     - job: check:vulnerabilities
       artifacts: true
   before_script:
-    - git config user.email "gitlab-ci@${CI_SERVER_HOST}"
-    - git config user.name "GitLab CI Auto-Fix"
-    - git remote set-url origin "https://oauth2:${GL_PAT}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - git config user.email "DEPENDENCY_SAVIOR@vulcan.mil"
+    - git config user.name "Dependency Savior"
+    - git remote set-url origin "https://oauth2:"$DEPENDENCY_SAVIOR_TOKEN"@"$CI_SERVER_HOST"/"$CI_PROJECT_PATH".git"
     - git fetch origin
-    - git checkout -b "auto-fix/vuln-remediation-${CI_PIPELINE_ID}" "origin/${CI_DEFAULT_BRANCH}"
+    - git checkout -b "auto-fix/vuln-remediation-"$CI_PIPELINE_ID" "origin/"$CI_DEFAULT_BRANCH""
   script:
     - |
       if [ "$VULNERABILITIES_FOUND" != "true" ]; then
@@ -129,7 +131,7 @@ auto:fix:
       fi
 
       echo "Running auto-fix..."
-      
+
     # --- yarn.lock ---
     - |
       if [ "$FIX_FRONTEND_PACKAGE" = "true" ]; then
@@ -183,8 +185,8 @@ auto:fix:
         echo "--- Skipping backend (no CVEs in gradle.lockfile) ---"
       fi
 
-    - git push origin "auto-fix/vuln-remediation-${CI_PIPELINE_ID}"
-    - echo "FIX_BRANCH=auto-fix/vuln-remediation-${CI_PIPELINE_ID}" >> fix_branch.env
+    - git push origin "auto-fix/vuln-remediation-'$CI_PIPELINE_ID'"
+    - echo "FIX_BRANCH=auto-fix/vuln-remediation-'$CI_PIPELINE_ID'" >> fix_branch.env
   artifacts:
     reports:
       dotenv: fix_branch.env
@@ -205,8 +207,8 @@ trigger:validation:
   needs:
     - auto:fix
   trigger:
-    project: $CI_PROJECT_PATH       # same project, different branch
-    branch: $FIX_BRANCH
+    project: "$CI_PROJECT_PATH"       # same project, different branch
+    branch: "$FIX_BRANCH"
     strategy: depend                # block and mirror pass/fail status
 
 # # =============================================================================
