@@ -76,6 +76,7 @@ check:vulnerabilities:
       for line in vuln_summary:
           print(line)
 
+      fix_frontend_package = 'yarn.lock' in affected_files
       fix_frontend = 'frontend/yarn.lock' in affected_files
       fix_journey  = 'journey/yarn.lock'  in affected_files
       fix_backend  = 'gradle.lockfile'    in affected_files
@@ -83,6 +84,7 @@ check:vulnerabilities:
 
       with open('vuln.env', 'w') as env:
           env.write(f"VULNERABILITIES_FOUND={'true' if any_found    else 'false'}\n")
+          env.write(f"FIX_FRONTEND_PACKAGE={'true'          if fix_frontend_package  else 'false'}\n")
           env.write(f"FIX_FRONTEND={'true'          if fix_frontend  else 'false'}\n")
           env.write(f"FIX_JOURNEY={'true'           if fix_journey   else 'false'}\n")
           env.write(f"FIX_BACKEND={'true'           if fix_backend   else 'false'}\n")
@@ -90,7 +92,7 @@ check:vulnerabilities:
       if not any_found:
           print("\nNo vulnerabilities found. Pipeline will stop after this job.")
       else:
-          print(f"\nFlags — FIX_FRONTEND={fix_frontend}, FIX_JOURNEY={fix_journey}, FIX_BACKEND={fix_backend}")
+          print(f"\nFlags — FIX_FRONTEND_PACKAGE={fix_frontend_package}, FIX_FRONTEND={fix_frontend}, FIX_JOURNEY={fix_journey}, FIX_BACKEND={fix_backend}")
       EOF
   artifacts:
     reports:
