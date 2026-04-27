@@ -41,6 +41,8 @@ stages:
 
 check:vulnerabilities:
   stage: check
+  tags:
+    - px-app-build
   script:
     - |
       python3 << 'EOF'
