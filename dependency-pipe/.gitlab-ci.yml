@@ -109,6 +109,9 @@ check:vulnerabilities:
 
 auto:fix:
   stage: auto-fix
+  tags:
+    - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   rules:
     - if: '$VULNERABILITIES_FOUND == "true"'
   needs:
@@ -190,6 +193,9 @@ auto:fix:
 
 trigger:validation:
   stage: trigger-validation
+  tags:
+    - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   rules:
     - if: '$VULNERABILITIES_FOUND == "true"'
   needs:
