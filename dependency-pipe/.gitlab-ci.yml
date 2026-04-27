@@ -43,8 +43,6 @@ check:vulnerabilities:
   stage: check
   tags:
     - px-app-build
-  needs:
-    - security-products:dependency-scanning
   script:
     - |
       python3 << 'EOF'
