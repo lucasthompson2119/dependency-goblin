@@ -43,6 +43,7 @@ check:vulnerabilities:
   stage: check
   tags:
     - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   script:
     - |
       python3 << 'EOF'
