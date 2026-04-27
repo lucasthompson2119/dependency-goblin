@@ -51,7 +51,6 @@ check:vulnerabilities:
       artifacts: true
 
   script:
-    - sleep 3600
     - |
       python3 << 'EOF'
       import json
