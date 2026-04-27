@@ -107,7 +107,7 @@ check:vulnerabilities:
 # before the branch is pushed.
 # =============================================================================
 
-auto:fix:
+check:fix:
   stage: auto-fix
   rules:
     - if: '$VULNERABILITIES_FOUND == "true"'
