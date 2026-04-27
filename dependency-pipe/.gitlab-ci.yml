@@ -53,7 +53,7 @@ check:vulnerabilities:
   script:
     - curl --location https://gitlab.vulcan.mil/army-software-factory/environments/inner-source/tesseract/tesseract-packages/frontend/px-migration-banner/-/jobs/2494029/artifacts/download?file_type=dependency_scanning --output gl-dependency-scanning-report.json
     - |
-      pip3 list
+      python3 -V
       python3 << 'EOF'
       import json
 
