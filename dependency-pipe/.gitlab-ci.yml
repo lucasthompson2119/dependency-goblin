@@ -253,7 +253,8 @@ trigger:validation:
   rules:
     - if: '$VULNERABILITIES_FOUND == "true"'
   needs:
-    - auto:fix
+    - auto:fix-frontend
+    # - auto:fix-backend
   trigger:
     project: "$CI_PROJECT_PATH"       # same project, different branch
     branch: "$FIX_BRANCH"
