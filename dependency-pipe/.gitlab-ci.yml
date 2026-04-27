@@ -80,7 +80,7 @@ check:vulnerabilities:
       fix_frontend = 'frontend/yarn.lock' in affected_files
       fix_journey  = 'journey/yarn.lock'  in affected_files
       fix_backend  = 'gradle.lockfile'    in affected_files
-      any_found    = fix_frontend or fix_journey or fix_backend
+      any_found    = fix_frontend_package or fix_frontend or fix_journey or fix_backend
 
       with open('vuln.env', 'w') as env:
           env.write(f"VULNERABILITIES_FOUND={'true' if any_found    else 'false'}\n")
