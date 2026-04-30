@@ -124,7 +124,12 @@ check:vulnerabilities:
       export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
       npm config set cafile "$COMBINED_CA"
       yarn config set cafile "$COMBINED_CA"
-      yarn config set cache-folder "$CI_PROJECT_DIR/.yarn-cache"
+      echo "HOME=$HOME"
+      pwd
+      whoami
+      ls -la
+      env | grep -i yarn
+      env | grep -i npm
       #
 
 auto:fix-frontend:
