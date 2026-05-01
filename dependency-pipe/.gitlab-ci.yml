@@ -25,11 +25,11 @@
 variables:
   DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
 
-stages:
-  - check
-  - fix-frontend
-  - fix-backend
-  # - trigger-validation
+# stages:
+#   - check
+#   - fix-frontend
+#   - fix-backend
+#   - trigger-validation
   # - merge-request
 
 # =============================================================================

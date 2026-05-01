@@ -1,7 +1,7 @@
-stages:
-  - test
-  - build
-  - publish
+# stages:
+#   - test
+#   - build
+#   - publish
 
 .node:
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips:20.20-dev
