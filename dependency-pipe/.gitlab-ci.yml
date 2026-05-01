@@ -117,6 +117,7 @@ check:vulnerabilities:
     key: ${CI_COMMIT_REF_SLUG}
     paths:
       - .yarn-cache/
+    policy: pull
   before_script:
     - |
       yarn config set cache-folder .yarn-cache
