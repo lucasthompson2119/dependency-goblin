@@ -27,7 +27,8 @@ variables:
 
 stages:
   - check
-  - auto-fix
+  - auto-fix-frontend
+  - auto-fix-backend
   # - trigger-validation
   # - merge-request
 
@@ -127,7 +128,7 @@ check:vulnerabilities:
       yarn config set cafile "$COMBINED_CA"
 
 auto:fix-frontend:
-  stage: auto-fix
+  stage: auto-fix-frontend
   extends: .node
   needs:
     - job: check:vulnerabilities
@@ -215,7 +216,7 @@ auto:fix-frontend:
     - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
 
 auto:fix-backend:
-  stage: auto-fix
+  stage: auto-fix-backend
   extends: .gradle
   needs:
     - job: check:vulnerabilities
