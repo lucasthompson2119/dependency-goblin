@@ -113,10 +113,10 @@ check:vulnerabilities:
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips:20.20-dev
   tags:
     - px-app-build
-  # cache:
-  #   key: ${CI_COMMIT_REF_SLUG}
-  #   paths:
-  #     - node_modules/
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .yarn-cache/
   before_script:
     - |
       export COMBINED_CA="$CI_PROJECT_DIR/combined-ca.crt"
@@ -124,6 +124,7 @@ check:vulnerabilities:
       export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
       npm config set cafile "$COMBINED_CA"
       yarn config set cafile "$COMBINED_CA"
+      yarn config set cache-folder .yarn-cache
 
 auto:fix-frontend:
   stage: auto-fix
