@@ -11,6 +11,7 @@ stages:
     key: ${CI_COMMIT_REF_SLUG}
     paths:
       - node_modules/
+    policy: pull
   before_script:
     - |
       export COMBINED_CA="$CI_PROJECT_DIR/combined-ca.crt"
