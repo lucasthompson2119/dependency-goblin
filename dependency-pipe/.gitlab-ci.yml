@@ -261,17 +261,21 @@ fix-backend:
 # until the downstream pipeline completes, and to inherit its pass/fail.
 # =============================================================================
 
-# trigger:validation:
-#   stage: trigger-validation
-#   rules:
-#     - if: '$VULNERABILITIES_FOUND == "true"'
-#   needs:
-#     - auto:fix-frontend
-#     # - auto:fix-backend
-#   trigger:
-#     project: "$CI_PROJECT_PATH"       # same project, different branch
-#     branch: "$FIX_BRANCH"
-#     strategy: depend                # block and mirror pass/fail status
+trigger:validation:
+  stage: trigger-validation
+  rules:
+    - if: '$VULNERABILITIES_FOUND == "true"'
+  needs:
+    - job: fix-frontend
+      artifacts: true
+      optional: true        # ← won't error if fix-frontend was skipped
+    - job: fix-backend
+      artifacts: true
+      optional: true
+  trigger:
+    project: "$CI_PROJECT_PATH"       # same project, different branch
+    branch: "$FIX_BRANCH"
+    strategy: depend                # block and mirror pass/fail status
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
