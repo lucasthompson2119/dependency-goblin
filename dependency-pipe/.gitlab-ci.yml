@@ -127,7 +127,7 @@ check:vulnerabilities:
       npm config set cafile "$COMBINED_CA"
       yarn config set cafile "$COMBINED_CA"
 
-auto:fix-frontend:
+fix-frontend:
   stage: fix-frontend
   extends: .node
   needs:
@@ -215,7 +215,7 @@ auto:fix-frontend:
     - export GRADLE_USER_HOME=`pwd`/.gradle 
     - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
 
-auto:fix-backend:
+fix-backend:
   stage: fix-backend
   extends: .gradle
   needs:
