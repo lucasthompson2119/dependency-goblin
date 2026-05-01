@@ -120,7 +120,6 @@ check:vulnerabilities:
     policy: pull
   before_script:
     - |
-      # yarn config set cache-folder node_modules/
       export COMBINED_CA="$CI_PROJECT_DIR/combined-ca.crt"
       cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/custom/dod-ca-bundle.pem > "$COMBINED_CA"
       export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
