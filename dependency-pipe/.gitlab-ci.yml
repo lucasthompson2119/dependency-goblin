@@ -120,10 +120,11 @@ check:vulnerabilities:
   before_script:
     - |
       export COMBINED_CA="$CI_PROJECT_DIR/combined-ca.crt"
-      # cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/custom/dod-ca-bundle.pem > "$COMBINED_CA"
-      # export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
-      # npm config set cafile "$COMBINED_CA"
-      # yarn config set cafile "$COMBINED_CA"
+      cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/custom/dod-ca-bundle.pem > "$COMBINED_CA"
+      export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
+      npm config set cafile "$COMBINED_CA"
+      yarn config set cafile "$COMBINED_CA"
+      sleep 3600
 
 auto:fix-frontend:
   stage: auto-fix
