@@ -28,7 +28,7 @@ variables:
 stages:
   - check
   - auto-fix
-  - trigger-validation
+  # - trigger-validation
   # - merge-request
 
 # =============================================================================
@@ -148,47 +148,47 @@ auto:fix-frontend:
         exit 0
       fi
 
-      echo "Running auto-fix..."
+    #   echo "Running auto-fix..."
 
-    # --- yarn.lock ---
-    - |
-      if [ "$FIX_FRONTEND_PACKAGE" = "true" ]; then
-        echo "=== Upgrading + linting frontend ==="
-        yarn upgrade --no-cache
-        yarn lint --no-cache
-        # git add yarn.lock package.json
-        # git diff --cached --quiet || git commit -m "fix(frontend_package): auto-upgrade yarn dependencies [skip ci]"
-      else
-        echo "--- Skipping frontend (no CVEs in yarn.lock) ---"
-      fi
+    # # --- yarn.lock ---
+    # - |
+    #   if [ "$FIX_FRONTEND_PACKAGE" = "true" ]; then
+    #     echo "=== Upgrading + linting frontend ==="
+    #     yarn upgrade --no-cache
+    #     yarn lint --no-cache
+    #     # git add yarn.lock package.json
+    #     # git diff --cached --quiet || git commit -m "fix(frontend_package): auto-upgrade yarn dependencies [skip ci]"
+    #   else
+    #     echo "--- Skipping frontend (no CVEs in yarn.lock) ---"
+    #   fi
 
-    # --- frontend/yarn.lock ---
-    - |
-      if [ "$FIX_FRONTEND" = "true" ]; then
-        echo "=== Upgrading + linting frontend ==="
-        cd frontend
-        yarn upgrade --no-cache
-        yarn lint --no-cache
-        cd ..
-        # git add frontend/yarn.lock frontend/package.json
-        # git diff --cached --quiet || git commit -m "fix(frontend): auto-upgrade yarn dependencies [skip ci]"
-      else
-        echo "--- Skipping frontend (no CVEs in frontend/yarn.lock) ---"
-      fi
+    # # --- frontend/yarn.lock ---
+    # - |
+    #   if [ "$FIX_FRONTEND" = "true" ]; then
+    #     echo "=== Upgrading + linting frontend ==="
+    #     cd frontend
+    #     yarn upgrade --no-cache
+    #     yarn lint --no-cache
+    #     cd ..
+    #     # git add frontend/yarn.lock frontend/package.json
+    #     # git diff --cached --quiet || git commit -m "fix(frontend): auto-upgrade yarn dependencies [skip ci]"
+    #   else
+    #     echo "--- Skipping frontend (no CVEs in frontend/yarn.lock) ---"
+    #   fi
 
-    # --- journey/yarn.lock ---
-    - |
-      if [ "$FIX_JOURNEY" = "true" ]; then
-        echo "=== Upgrading + linting journey ==="
-        cd journey
-        yarn upgrade --no-cache
-        yarn lint --no-cache
-        cd ..
-        # git add journey/yarn.lock journey/package.json
-        # git diff --cached --quiet || git commit -m "fix(journey): auto-upgrade yarn dependencies [skip ci]"
-      else
-        echo "--- Skipping journey (no CVEs in journey/yarn.lock) ---"
-      fi
+    # # --- journey/yarn.lock ---
+    # - |
+    #   if [ "$FIX_JOURNEY" = "true" ]; then
+    #     echo "=== Upgrading + linting journey ==="
+    #     cd journey
+    #     yarn upgrade --no-cache
+    #     yarn lint --no-cache
+    #     cd ..
+    #     # git add journey/yarn.lock journey/package.json
+    #     # git diff --cached --quiet || git commit -m "fix(journey): auto-upgrade yarn dependencies [skip ci]"
+    #   else
+    #     echo "--- Skipping journey (no CVEs in journey/yarn.lock) ---"
+    #   fi
 
 # .gradle:
 #   image: $CI_BASE_IMAGE_JDK_17
@@ -251,17 +251,17 @@ auto:fix-frontend:
 # until the downstream pipeline completes, and to inherit its pass/fail.
 # =============================================================================
 
-trigger:validation:
-  stage: trigger-validation
-  rules:
-    - if: '$VULNERABILITIES_FOUND == "true"'
-  needs:
-    - auto:fix-frontend
-    # - auto:fix-backend
-  trigger:
-    project: "$CI_PROJECT_PATH"       # same project, different branch
-    branch: "$FIX_BRANCH"
-    strategy: depend                # block and mirror pass/fail status
+# trigger:validation:
+#   stage: trigger-validation
+#   rules:
+#     - if: '$VULNERABILITIES_FOUND == "true"'
+#   needs:
+#     - auto:fix-frontend
+#     # - auto:fix-backend
+#   trigger:
+#     project: "$CI_PROJECT_PATH"       # same project, different branch
+#     branch: "$FIX_BRANCH"
+#     strategy: depend                # block and mirror pass/fail status
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
