@@ -123,7 +123,10 @@ check:vulnerabilities:
       cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/custom/dod-ca-bundle.pem > "$COMBINED_CA"
       export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
       npm config set cafile "$COMBINED_CA"
-      yarn config set cafile "$COMBINED_CA"
+      yarn config set cafile "$COMBINED_CA" --no-cache
+      echo "CI_BUILDS_DIR=$CI_BUILDS_DIR"
+      echo "CI_PROJECT_DIR=$CI_PROJECT_DIR"
+      pwd
       #
 
 auto:fix-frontend:
