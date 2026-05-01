@@ -221,6 +221,7 @@ fix-backend:
   needs:
     - job: check:vulnerabilities
       artifacts: true
+  script:
     # --- gradle.lockfile ---
     - |
       if [ "$FIX_BACKEND" = "true" ]; then
