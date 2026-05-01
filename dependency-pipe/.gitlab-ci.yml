@@ -188,7 +188,8 @@ fix-frontend:
         echo "--- Skipping journey (no CVEs in journey/yarn.lock) ---"
       fi
     
-    - git push origin "auto-fix/vuln-remediation-'$CI_PIPELINE_ID'"
+    - git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+    - echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
 
 .gradle:
   image: $CI_BASE_IMAGE_JDK_17
@@ -245,8 +246,8 @@ fix-backend:
         echo "--- Skipping backend (no CVEs in gradle.lockfile) ---"
       fi
 
-    - git push origin "auto-fix/vuln-remediation-'$CI_PIPELINE_ID'"
-    - echo "FIX_BRANCH=auto-fix/vuln-remediation-'$CI_PIPELINE_ID'" >> fix_branch.env
+    - git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+    - echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
     reports:
       dotenv: fix_branch.env
