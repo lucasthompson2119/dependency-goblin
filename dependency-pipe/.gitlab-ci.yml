@@ -113,10 +113,10 @@ check:vulnerabilities:
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips:20.20-dev
   tags:
     - px-app-build
-  cache:
-    key: ${CI_COMMIT_REF_SLUG}
-    paths:
-      - node_modules/
+  # cache:
+  #   key: ${CI_COMMIT_REF_SLUG}
+  #   paths:
+  #     - node_modules/
   before_script:
     - |
       export COMBINED_CA="$CI_PROJECT_DIR/combined-ca.crt"
