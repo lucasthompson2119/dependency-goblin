@@ -44,6 +44,10 @@ variables:
 
 check:vulnerabilities:
   stage: check
+  rules:
+  - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
+  - when: never
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -129,6 +133,10 @@ check:vulnerabilities:
 
 fix-frontend:
   stage: fix-frontend
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - when: never
   extends: .node
   needs:
     - job: check:vulnerabilities
@@ -225,6 +233,10 @@ fix-frontend:
 
 fix-backend:
   stage: fix-backend
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - when: never
   extends: .gradle
   needs:
     - job: check:vulnerabilities
@@ -269,18 +281,37 @@ fix-backend:
 trigger:validation:
   stage: trigger-validation
   rules:
-    - if: '$VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - when: never
   needs:
     - job: fix-frontend
       artifacts: true
-      optional: true        # ← won't error if fix-frontend was skipped
+      optional: true
     - job: fix-backend
       artifacts: true
       optional: true
+  before_script:
+    - |
+      echo "========================================"
+      echo "  TRIGGER VALIDATION"
+      echo "========================================"
+      echo "  FIX_BRANCH:          $FIX_BRANCH"
+      echo "  CI_PROJECT_PATH:     $CI_PROJECT_PATH"
+      echo "  VULNERABILITIES_FOUND: $VULNERABILITIES_FOUND"
+      echo "  FIX_FRONTEND_PACKAGE:  $FIX_FRONTEND_PACKAGE"
+      echo "  FIX_FRONTEND:          $FIX_FRONTEND"
+      echo "  FIX_JOURNEY:           $FIX_JOURNEY"
+      echo "  FIX_BACKEND:           $FIX_BACKEND"
+      echo "========================================"
+      if [ -z "$FIX_BRANCH" ]; then
+        echo "ERROR: FIX_BRANCH is empty — fix job artifacts may not have been passed correctly"
+        exit 1
+      fi
   trigger:
-    project: "$CI_PROJECT_PATH"       # same project, different branch
+    project: "$CI_PROJECT_PATH"
     branch: "$FIX_BRANCH"
-    strategy: depend                # block and mirror pass/fail status
+    strategy: depend
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
@@ -289,7 +320,9 @@ trigger:validation:
 create:merge-request:
   stage: merge-request
   rules:
-    - if: '$VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - when: never
   needs:
     - job: trigger:validation
     - job: fix-frontend
@@ -300,12 +333,34 @@ create:merge-request:
       optional: true
   script:
     - |
+      echo "========================================"
+      echo "  CREATE MERGE REQUEST"
+      echo "========================================"
+      echo "  FIX_BRANCH:   $FIX_BRANCH"
+      echo "  TARGET:       $CI_DEFAULT_BRANCH"
+      echo "  PROJECT ID:   $CI_PROJECT_ID"
+      echo "  API URL:      $CI_API_V4_URL"
+      echo "  FIX_FRONTEND_PACKAGE: $FIX_FRONTEND_PACKAGE"
+      echo "  FIX_FRONTEND:         $FIX_FRONTEND"
+      echo "  FIX_JOURNEY:          $FIX_JOURNEY"
+      echo "  FIX_BACKEND:          $FIX_BACKEND"
+      echo "========================================"
+
+      if [ -z "$FIX_BRANCH" ]; then
+        echo "ERROR: FIX_BRANCH is empty — cannot create MR without a source branch"
+        exit 1
+      fi
+
       FIXED_ITEMS=""
       [ "$FIX_FRONTEND_PACKAGE" = "true" ] && FIXED_ITEMS="${FIXED_ITEMS}- \`yarn.lock\` — upgraded via \`yarn upgrade\`\n"
       [ "$FIX_FRONTEND" = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`frontend/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
       [ "$FIX_JOURNEY"  = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`journey/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
       [ "$FIX_BACKEND"  = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`gradle.lockfile\` — refreshed via \`./gradlew --refresh-dependencies\`\n"
 
+      echo "Fixed items summary:"
+      echo -e "$FIXED_ITEMS"
+
+      echo "Sending MR creation request..."
       RESPONSE=$(curl --silent --show-error \
         --request POST \
         --header "PRIVATE-TOKEN: ${DEPENDENCY_SAVIOR_TOKEN}" \
@@ -321,6 +376,22 @@ create:merge-request:
           \"remove_source_branch\": true
         }")
 
+      echo "Raw API response:"
       echo "$RESPONSE"
+
+      # Check for API-level errors
+      ERROR=$(echo "$RESPONSE" | python3 -c "
+      import json,sys
+      r = json.load(sys.stdin)
+      errs = r.get('message', r.get('error', ''))
+      print(errs) if errs else print('none')
+      ")
+      if [ "$ERROR" != "none" ]; then
+        echo "ERROR: GitLab API returned an error: $ERROR"
+        exit 1
+      fi
+
       MR_URL=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('web_url', 'URL not found'))")
-      echo "Merge request created: $MR_URL"
+      echo "========================================"
+      echo "  Merge request created: $MR_URL"
+      echo "========================================"
