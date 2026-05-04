@@ -278,7 +278,7 @@ fix-backend:
 # until the downstream pipeline completes, and to inherit its pass/fail.
 # =============================================================================
 
-trigger:validation:
+validate:fix-branch:
   stage: trigger-validation
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
@@ -294,10 +294,10 @@ trigger:validation:
   script:
     - |
       echo "========================================"
-      echo "  TRIGGER VALIDATION"
+      echo "  PRE-TRIGGER VALIDATION"
       echo "========================================"
-      echo "  FIX_BRANCH:          $FIX_BRANCH"
-      echo "  CI_PROJECT_PATH:     $CI_PROJECT_PATH"
+      echo "  FIX_BRANCH:            $FIX_BRANCH"
+      echo "  CI_PROJECT_PATH:       $CI_PROJECT_PATH"
       echo "  VULNERABILITIES_FOUND: $VULNERABILITIES_FOUND"
       echo "  FIX_FRONTEND_PACKAGE:  $FIX_FRONTEND_PACKAGE"
       echo "  FIX_FRONTEND:          $FIX_FRONTEND"
@@ -305,9 +305,25 @@ trigger:validation:
       echo "  FIX_BACKEND:           $FIX_BACKEND"
       echo "========================================"
       if [ -z "$FIX_BRANCH" ]; then
-        echo "ERROR: FIX_BRANCH is empty — fix job artifacts may not have been passed correctly"
+        echo "ERROR: FIX_BRANCH is empty — fix job artifacts may not have passed correctly"
         exit 1
       fi
+      echo "FIX_BRANCH confirmed: $FIX_BRANCH — proceeding to trigger"
+
+trigger:validation:
+  stage: trigger-validation
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - when: never
+  needs:
+    - job: validate:fix-branch    # blocks trigger until validation passes
+    - job: fix-frontend
+      artifacts: true
+      optional: true
+    - job: fix-backend
+      artifacts: true
+      optional: true
   trigger:
     project: "$CI_PROJECT_PATH"
     branch: "$FIX_BRANCH"
