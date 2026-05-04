@@ -291,7 +291,7 @@ trigger:validation:
     - job: fix-backend
       artifacts: true
       optional: true
-  before_script:
+  script:
     - |
       echo "========================================"
       echo "  TRIGGER VALIDATION"
