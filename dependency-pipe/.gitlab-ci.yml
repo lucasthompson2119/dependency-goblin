@@ -133,12 +133,6 @@ fix-frontend:
   needs:
     - job: check:vulnerabilities
       artifacts: true
-  before_script:
-    - git config --global user.email "sdu4-2@swf.army.mil"
-    - git config --global user.name "Dependency_Savior"
-    - git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
-    - git fetch origin
-    - git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH"
   script:
     - |
       if [ "$FIX_FRONTEND_PACKAGE" != "true" || "$FIX_FRONTEND" != true || "$FIX_JOURNEY" != true]; then
@@ -147,6 +141,12 @@ fix-frontend:
       fi
 
       echo "Running auto-fix..."
+
+    - git config --global user.email "sdu4-2@swf.army.mil"
+    - git config --global user.name "Dependency_Savior"
+    - git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+    - git fetch origin
+    - git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH"
 
     # --- yarn.lock ---
     - |
@@ -190,6 +190,11 @@ fix-frontend:
     
     - git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
     - echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
+
+  artifacts:
+    reports:
+      dotenv: fix_branch.env
+    expire_in: 1 day
 
 .gradle:
   image: $CI_BASE_IMAGE_JDK_17
@@ -281,34 +286,41 @@ trigger:validation:
 # # MERGE REQUEST — only reached if trigger:validation passed
 # # =============================================================================
 
-# create:merge-request:
-#   stage: merge-request
-#   rules:
-#     - if: '$VULNERABILITIES_FOUND == "true"'
-#   needs:
-#     - trigger:validation
-#   script:
-#     - |
-#       FIXED_ITEMS=""
-#       [ "$FIX_FRONTEND" = "true" ] && FIXED_ITEMS="${FIXED_ITEMS}- \`frontend/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
-#       [ "$FIX_JOURNEY"  = "true" ] && FIXED_ITEMS="${FIXED_ITEMS}- \`journey/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
-#       [ "$FIX_BACKEND"  = "true" ] && FIXED_ITEMS="${FIXED_ITEMS}- \`gradle.lockfile\` — refreshed via \`./gradlew --refresh-dependencies\`\n"
+create:merge-request:
+  stage: merge-request
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+  needs:
+    - job: trigger:validation
+    - job: fix-frontend
+      artifacts: true
+      optional: true
+    - job: fix-backend
+      artifacts: true
+      optional: true
+  script:
+    - |
+      FIXED_ITEMS=""
+      [ "$FIX_FRONTEND_PACKAGE" = "true" ] && FIXED_ITEMS="${FIXED_ITEMS}- \`yarn.lock\` — upgraded via \`yarn upgrade\`\n"
+      [ "$FIX_FRONTEND" = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`frontend/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
+      [ "$FIX_JOURNEY"  = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`journey/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
+      [ "$FIX_BACKEND"  = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`gradle.lockfile\` — refreshed via \`./gradlew --refresh-dependencies\`\n"
 
-#       RESPONSE=$(curl --silent --show-error \
-#         --request POST \
-#         --header "PRIVATE-TOKEN: ${GL_PAT}" \
-#         --header "Content-Type: application/json" \
-#         --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
-#         --data "{
-#           \"source_branch\": \"${FIX_BRANCH}\",
-#           \"target_branch\": \"${CI_DEFAULT_BRANCH}\",
-#           \"title\": \"fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})\",
-#           \"description\": \"## Automated Vulnerability Remediation\n\nThis MR was automatically created by pipeline [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL}) after the daily dependency scan detected Critical or High CVEs.\n\n### Changes\n${FIXED_ITEMS}\n### Validation\n- ✅ Lint passed (inline with upgrade)\n- ✅ Build passed\n- ✅ Tests passed\n\nPlease review the dependency diff before merging.\",
-#           \"assignee_id\": ${ASSIGNEE_USER_ID},
-#           \"labels\": \"security,automated,dependencies\",
-#           \"remove_source_branch\": true
-#         }")
+      RESPONSE=$(curl --silent --show-error \
+        --request POST \
+        --header "PRIVATE-TOKEN: ${DEPENDENCY_SAVIOR_TOKEN}" \
+        --header "Content-Type: application/json" \
+        --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
+        --data "{
+          \"source_branch\": \"${FIX_BRANCH}\",
+          \"target_branch\": \"${CI_DEFAULT_BRANCH}\",
+          \"title\": \"fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})\",
+          \"description\": \"## Automated Vulnerability Remediation\n\nThis MR was automatically created by pipeline [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL}) after the daily dependency scan detected CVEs.\n\n### Changes\n${FIXED_ITEMS}\n### Validation\n- ✅ Lint passed (inline with upgrade)\n- ✅ Build passed\n- ✅ Tests passed\n\nPlease review the dependency diff before merging.\",
+          \"assignee_id\": ${ASSIGNEE_USER_ID},
+          \"labels\": \"security,automated,dependencies\",
+          \"remove_source_branch\": true
+        }")
 
-#       echo "$RESPONSE"
-#       MR_URL=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('web_url', 'URL not found'))")
-#       echo "Merge request created: $MR_URL"
+      echo "$RESPONSE"
+      MR_URL=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('web_url', 'URL not found'))")
+      echo "Merge request created: $MR_URL"
