@@ -289,7 +289,7 @@ trigger:validation:
 create:merge-request:
   stage: merge-request
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$VULNERABILITIES_FOUND == "true"'
   needs:
     - job: trigger:validation
     - job: fix-frontend
