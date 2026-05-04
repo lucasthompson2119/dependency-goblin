@@ -141,8 +141,8 @@ fix-frontend:
     - git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH"
   script:
     - |
-      if [ "$VULNERABILITIES_FOUND" != "true" ]; then
-        echo "No vulnerabilities found. Skipping."
+      if [ "$FIX_FRONTEND_PACKAGE" != "true" || "$FIX_FRONTEND" != true || "$FIX_JOURNEY" != true]; then
+        echo "No frontend vulnerabilities found. Skipping."
         exit 0
       fi
 
@@ -226,8 +226,8 @@ fix-backend:
       artifacts: true
   script:
     - |
-      if [ "$VULNERABILITIES_FOUND" != "true" ]; then
-        echo "No vulnerabilities found. Skipping."
+      if [ "$FIX_BACKEND" != "true" ]; then
+        echo "No backend vulnerabilities found. Skipping."
         exit 0
       fi
 
