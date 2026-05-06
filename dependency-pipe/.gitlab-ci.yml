@@ -334,7 +334,7 @@ trigger:validation:
   trigger:
     project: "$CI_PROJECT_PATH"
     branch: "$FIX_BRANCH"
-    strategy: mirror
+    strategy: depend
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
