@@ -284,6 +284,9 @@ validate:fix-branch:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     # - when: always
+  tags:
+    - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
     - job: fix-frontend
       # artifacts: true
@@ -343,6 +346,9 @@ create:merge-request:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     # - when: always
+  tags:
+    - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
     - job: trigger:validation
     - job: fix-frontend
