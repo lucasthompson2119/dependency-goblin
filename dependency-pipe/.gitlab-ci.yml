@@ -24,6 +24,8 @@
 # =============================================================================
 variables:
   DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
+  FRONTEND_CIYAML_URL: $FRONTEND_CIYAML_URL
+  FRONTEND_CIYAML_FILE: $FRONTEND_CIYAML_FILE
 
 # stages:
 #   - check
@@ -332,9 +334,10 @@ trigger:validation:
     - job: check:vulnerabilities
       artifacts: true
   trigger:
-    project: "$CI_PROJECT_PATH"
-    branch: "$FIX_BRANCH"
-    strategy: depend
+    include:
+      - project: "$FRONTEND_CIYAML_URL"
+        file: "$FRONTEND_CIYAML_FILE"
+        ref: "dep-savior"
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
