@@ -139,7 +139,7 @@ fix-frontend:
     - when: never
   extends: .node
   needs:
-    - job: check:vulnerabilities
+    - job: check
       artifacts: true
   script:
     - |
