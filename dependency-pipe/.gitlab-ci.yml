@@ -134,8 +134,8 @@ check:vulnerabilities:
 fix-frontend:
   stage: fix-frontend
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
   extends: .node
   needs:
@@ -143,7 +143,7 @@ fix-frontend:
       artifacts: true
   script:
     - |
-      if [ "$FIX_FRONTEND_PACKAGE" != "true" || "$FIX_FRONTEND" != true || "$FIX_JOURNEY" != true]; then
+      if [ "$FIX_FRONTEND_PACKAGE" != "true" ] && [ "$FIX_FRONTEND" != "true" ] && [ "$FIX_JOURNEY" != "true" ]; then
         echo "No frontend vulnerabilities found. Skipping."
         exit 0
       fi
@@ -234,8 +234,8 @@ fix-frontend:
 fix-backend:
   stage: fix-backend
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
   extends: .gradle
   needs:
@@ -281,8 +281,8 @@ fix-backend:
 validate:fix-branch:
   stage: trigger-validation
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
   needs:
     - job: fix-frontend
@@ -313,8 +313,8 @@ validate:fix-branch:
 trigger:validation:
   stage: trigger-validation
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
   needs:
     - job: validate:fix-branch    # blocks trigger until validation passes
@@ -336,8 +336,8 @@ trigger:validation:
 create:merge-request:
   stage: merge-request
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
   needs:
     - job: trigger:validation
