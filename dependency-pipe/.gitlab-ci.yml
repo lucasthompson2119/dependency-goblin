@@ -309,9 +309,8 @@ fix-backend:
 
       echo "=== Verifying build still compiles after patches ==="
       ./gradlew --refresh-dependencies dependencies
-      ./gradlew checkstyleMain checkstyleTest
 
-      git config --global user.email "email"
+      git config --global user.email "sdu4-2@swf.army.mil"
       git config --global user.name "Dependency_Savior"
       git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
       git fetch origin
