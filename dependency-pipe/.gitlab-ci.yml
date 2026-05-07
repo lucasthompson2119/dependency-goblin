@@ -62,7 +62,7 @@ check:vulnerabilities:
   script:
     - |
       python3 << 'EOF'
-      import json
+      import json, re
 
       with open('gl-dependency-scanning-report.json') as f:
           report = json.load(f)
@@ -71,43 +71,95 @@ check:vulnerabilities:
 
       affected_files = set()
       vuln_summary = []
+      gradle_remediations = []  # list of (package, from_version, to_version, file)
 
       for v in report.get('vulnerabilities', []):
           if v.get('severity') not in target_severities:
               continue
-          loc_file = v.get('location', {}).get('file', '')
+
+          loc       = v.get('location', {})
+          loc_file  = loc.get('file', '')
+          dep       = loc.get('dependency', {})
+          pkg_name  = dep.get('package', {}).get('name', 'unknown')
+          from_ver  = dep.get('version', '')
+          solution  = v.get('solution', '')
+          severity  = v.get('severity', '')
+
           affected_files.add(loc_file)
-          pkg = v.get('location', {}).get('dependency', {}).get('package', {}).get('name', 'unknown')
-          vuln_summary.append(f"  [{v.get('severity')}] {v.get('name')} — {loc_file} (package: {pkg})")
+          vuln_summary.append(
+              f"  [{severity}] {v.get('name')} — {loc_file} "
+              f"(package: {pkg_name} @ {from_ver})"
+          )
+
+          # Extract target version from solution text
+          # Handles: "Upgrade to version 4.1.133.Final or above."
+          #           "Upgrade to versions 1.2.3 or above."
+          #           "Upgrade to 1.2.3."
+          match = re.search(
+              r'[Uu]pgrade to (?:versions?\s+)?([0-9][^\s,]+?)(?:\s+or above)?[.,\s]',
+              solution
+          )
+          to_ver = match.group(1).rstrip('.,') if match else None
+
+          if loc_file == 'build.gradle' and from_ver and to_ver:
+              gradle_remediations.append((pkg_name, from_ver, to_ver, loc_file))
+              print(f"  [GRADLE FIX] {pkg_name}: {from_ver} → {to_ver} in {loc_file}")
+          elif loc_file == 'build.gradle' and not to_ver:
+              print(f"  [GRADLE WARN] Could not parse target version from solution: '{solution}'")
 
       print(f"\nAffected lockfiles: {affected_files or 'none'}")
       print("Vulnerability summary:")
       for line in vuln_summary:
           print(line)
 
-      fix_frontend_package = 'yarn.lock' in affected_files
-      fix_frontend = 'frontend/yarn.lock' in affected_files
-      fix_journey  = 'journey/yarn.lock'  in affected_files
-      fix_backend  = 'build.gradle'    in affected_files
-      any_found    = fix_frontend_package or fix_frontend or fix_journey or fix_backend
+      fix_frontend_package = 'yarn.lock'          in affected_files
+      fix_frontend         = 'frontend/yarn.lock' in affected_files
+      fix_journey          = 'journey/yarn.lock'  in affected_files
+      fix_backend          = 'build.gradle'       in affected_files
+      any_found            = fix_frontend_package or fix_frontend or fix_journey or fix_backend
 
       with open('vuln.env', 'w') as env:
-          env.write(f"VULNERABILITIES_FOUND={'true' if any_found    else 'false'}\n")
-          env.write(f"FIX_FRONTEND_PACKAGE={'true'          if fix_frontend_package  else 'false'}\n")
-          env.write(f"FIX_FRONTEND={'true'          if fix_frontend  else 'false'}\n")
-          env.write(f"FIX_JOURNEY={'true'           if fix_journey   else 'false'}\n")
-          env.write(f"FIX_BACKEND={'true'           if fix_backend   else 'false'}\n")
+          env.write(f"VULNERABILITIES_FOUND={'true' if any_found           else 'false'}\n")
+          env.write(f"FIX_FRONTEND_PACKAGE={'true'  if fix_frontend_package else 'false'}\n")
+          env.write(f"FIX_FRONTEND={'true'          if fix_frontend         else 'false'}\n")
+          env.write(f"FIX_JOURNEY={'true'           if fix_journey          else 'false'}\n")
+          env.write(f"FIX_BACKEND={'true'           if fix_backend          else 'false'}\n")
+
+      # Write a self-contained remediation script for fix-backend to execute.
+      # Each line is a sed in-place substitution scoped to the exact package
+      # and version so unrelated dependencies are never touched.
+      with open('gradle_remediations.sh', 'w') as sh:
+          sh.write("#!/bin/sh\nset -e\n\n")
+          if gradle_remediations:
+              for pkg_name, from_ver, to_ver, loc_file in gradle_remediations:
+                  # Gradle uses : as group/artifact separator; the report uses /
+                  artifact = pkg_name.split('/')[-1]
+                  sh.write(f"echo \"  Patching {pkg_name}: {from_ver} -> {to_ver} in {loc_file}\"\n")
+                  sh.write(
+                      f"sed -i 's/{re.escape(artifact)}:{re.escape(from_ver)}"
+                      f"/{artifact}:{to_ver}/g' {loc_file}\n"
+                  )
+                  sh.write(f"echo \"  Done.\"\n\n")
+          else:
+              sh.write("echo 'No gradle remediations to apply.'\n")
+
+      print(f"\nWrote {len(gradle_remediations)} gradle remediation(s) to gradle_remediations.sh")
 
       if not any_found:
           print("\nNo vulnerabilities found. Pipeline will stop after this job.")
       else:
-          print(f"\nFlags — FIX_FRONTEND_PACKAGE={fix_frontend_package}, FIX_FRONTEND={fix_frontend}, FIX_JOURNEY={fix_journey}, FIX_BACKEND={fix_backend}")
+          print(
+              f"\nFlags — FIX_FRONTEND_PACKAGE={fix_frontend_package}, "
+              f"FIX_FRONTEND={fix_frontend}, FIX_JOURNEY={fix_journey}, "
+              f"FIX_BACKEND={fix_backend}"
+          )
       EOF
   artifacts:
     reports:
       dotenv: vuln.env
+    paths:
+      - gradle_remediations.sh   # ← consumed by fix-backend
     expire_in: 1 day
-
 # =============================================================================
 # AUTO-FIX — create branch, upgrade affected deps, lint inline, push
 #
@@ -250,21 +302,22 @@ fix-backend:
         exit 0
       fi
 
-      echo "Running auto-fix..."
+    - echo "=== Applying gradle remediations ==="
+    - cat gradle_remediations.sh   # print for visibility
+    - chmod +x gradle_remediations.sh
+    - ./gradle_remediations.sh
 
-    # --- gradle.lockfile ---
-    - |
-      if [ "$FIX_BACKEND" = "true" ]; then
-        echo "=== Refreshing + linting backend ==="
-        ./gradlew --refresh-dependencies dependencies
-        ./gradlew dependencies --write-locks
-        ./gradlew checkstyleMain checkstyleTest
-        # git add gradle.lockfile
-        # git diff --cached --quiet || git commit -m "fix(backend): auto-refresh gradle lockfile [skip ci]"
-      else
-        echo "--- Skipping backend (no CVEs in gradle.lockfile) ---"
-      fi
+    - echo "=== Verifying build still compiles after patches ==="
+    - ./gradlew --refresh-dependencies dependencies
+    - ./gradlew checkstyleMain checkstyleTest
 
+    - git config --global user.email "email"
+    - git config --global user.name "Dependency_Savior"
+    - git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+    - git fetch origin
+    - git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH" || git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+    - git add build.gradle
+    - git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation [skip ci]"
     - git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
     - echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
