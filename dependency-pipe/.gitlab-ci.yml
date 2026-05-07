@@ -467,11 +467,8 @@ create:merge-request:
   needs:
     # - job: trigger:validation
     - job: fix-frontend
-      # artifacts: true
-      # optional: true
-    - job: fix-backend
-      # artifacts: true
-      # optional: true
+    - job: fix-backend-python
+    - job: fix-backend-gradle
     - job: check:vulnerabilities
       artifacts: true
   script:
