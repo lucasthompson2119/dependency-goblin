@@ -140,24 +140,19 @@ check:vulnerabilities:
                   sh.write(f"""python3 << 'PYEOF'
                   from pathlib import Path
                   import re
-
                   path = Path("{loc_file}")
                   text = path.read_text()
-
                   pattern = re.compile(
-                      r"(implementation\\(['\\"](?:[^:'\\"]+:)?{escaped_artifact}['\\"]\\)\\s*\\{{[^}}]*?require\\s+['\\"])"
-                      r"([^'\\"]+)"
-                      r"(['\\"])",
-                      re.DOTALL
+                    r"(implementation\\(['\\"](?:[^:'\\"]+:)?{escaped_artifact}['\\"]\\)\\s*\\{{[^}}]*?require\\s+['\\"])"
+                    r"([^'\\"]+)"
+                    r"(['\\"])",
+                    re.DOTALL
                   )
-
                   updated = pattern.sub(
-                      rf"\\g<1>{to_ver}\\3",
-                      text
+                    rf"\\g<1>{to_ver}\\3",
+                    text
                   )
-
                   path.write_text(updated)
-
                   print("Updated {artifact} -> {to_ver}")
                   PYEOF
                   """)
