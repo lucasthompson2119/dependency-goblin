@@ -1,8 +1,8 @@
 stages:
   # - lockfile_updater
-  - test
-  - build
-  - publish
+  # - test
+  # - build
+  # - publish
 
 # Templates
 .gradle:

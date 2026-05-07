@@ -49,7 +49,7 @@ check:vulnerabilities:
   rules:
   - if: '$CI_PIPELINE_SOURCE == "schedule"'
   - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-  # - when: always
+  - when: never
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -138,7 +138,7 @@ fix-frontend:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-    # - when: always
+    - when: never
   extends: .node
   needs:
     - job: check:vulnerabilities
@@ -238,7 +238,7 @@ fix-backend:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-    # - when: always
+    - when: never
   extends: .gradle
   needs:
     - job: check:vulnerabilities
@@ -349,7 +349,7 @@ create:merge-request:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-    # - when: always
+    - when: never
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
