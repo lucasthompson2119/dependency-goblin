@@ -58,11 +58,12 @@ check:vulnerabilities:
       job: dependency-scanning
       ref: "main"
       artifacts: true
-
+  before_script:
+    - pip3 install textwrap
   script:
     - |
       python3 << 'EOF'
-      import json, re
+      import json, re, textwrap
 
       with open('gl-dependency-scanning-report.json') as f:
           report = json.load(f)
@@ -137,7 +138,8 @@ check:vulnerabilities:
                   sh.write(f"echo \"  Patching {pkg_name}: {from_ver} -> {to_ver} in {loc_file}\"\n")
                   escaped_artifact = re.escape(artifact)
 
-                  sh.write(f"""python3 << 'PYEOF'
+                  sh.write(textwrap.dedent(f"""\
+                  python3 << 'PYEOF'
                   from pathlib import Path
                   import re
                   path = Path("{loc_file}")
