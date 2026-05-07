@@ -288,7 +288,8 @@ fix-frontend:
     KEYSTORE_PASS: changeit
   tags:
     - px-app-build
-  # before_script:
+  before_script:
+    
     # - |- 
     #   cp /usr/lib/jvm/default-jvm/lib/security/cacerts /tmp/cacerts && \
     #   chmod +w /tmp/cacerts && \
@@ -306,14 +307,15 @@ fix-frontend:
     # - mkdir -p .gradle
     # - export GRADLE_USER_HOME=`pwd`/.gradle 
     # - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
-
-fix-backend:
+fix-backend-python:
   stage: fix-backend
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
-  extends: .gradle
+  tags:
+    - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
     - job: check:vulnerabilities
       artifacts: true
@@ -330,7 +332,6 @@ fix-backend:
       ./gradle_remediations.sh
 
       echo "=== Verifying build still compiles after patches ==="
-      ./gradlew --refresh-dependencies dependencies
 
       git config --global user.email "sdu4-2@swf.army.mil"
       git config --global user.name "Dependency_Savior"
@@ -338,6 +339,42 @@ fix-backend:
       git fetch origin
       git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH" || git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
       git add build.gradle
+      git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation [skip ci]"
+      git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+      echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
+  artifacts:
+    reports:
+      dotenv: fix_branch.env
+    expire_in: 1 day
+
+fix-backend-gradle:
+  stage: fix-backend
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
+    - when: never
+  extends: .gradle
+  needs:
+    - job: fix-backend-python
+    - job: check:vulnerabilities
+      artifacts: true
+  script:
+    - |
+      if [ "$FIX_BACKEND" != "true" ]; then
+        echo "No backend vulnerabilities found. Skipping."
+        exit 0
+      fi
+
+      echo "=== Verifying build still compiles after patches ==="
+      ./gradlew dependencies --write-locks
+      ./gradlew --refresh-dependencies dependencies
+
+      git config --global user.email "sdu4-2@swf.army.mil"
+      git config --global user.name "Dependency_Savior"
+      git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git fetch origin
+      git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH" || git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+      git add .
       git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation [skip ci]"
       git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
       echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
