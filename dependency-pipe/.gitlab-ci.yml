@@ -58,8 +58,6 @@ check:vulnerabilities:
       job: dependency-scanning
       ref: "main"
       artifacts: true
-  before_script:
-    - pip3 install textwrap
   script:
     - |
       python3 << 'EOF'
