@@ -88,7 +88,7 @@ check:vulnerabilities:
       fix_frontend_package = 'yarn.lock' in affected_files
       fix_frontend = 'frontend/yarn.lock' in affected_files
       fix_journey  = 'journey/yarn.lock'  in affected_files
-      fix_backend  = 'gradle.lockfile'    in affected_files
+      fix_backend  = 'build.gradle'    in affected_files
       any_found    = fix_frontend_package or fix_frontend or fix_journey or fix_backend
 
       with open('vuln.env', 'w') as env:
