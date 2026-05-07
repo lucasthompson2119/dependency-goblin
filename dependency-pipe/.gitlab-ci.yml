@@ -56,7 +56,7 @@ check:vulnerabilities:
   needs:
     - project: "$CI_PROJECT_PATH"
       job: dependency-scanning
-      ref: "$CI_COMMIT_REF_NAME"
+      ref: "main"
       artifacts: true
 
   script:
