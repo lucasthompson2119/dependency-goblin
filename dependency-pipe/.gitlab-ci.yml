@@ -155,7 +155,7 @@ check:vulnerabilities:
                   path.write_text(updated)
                   print("Updated {artifact} -> {to_ver}")
                   PYEOF
-                  """)
+                  """))
                   sh.write(f"echo \"  Done.\"\n\n")
           else:
               sh.write("echo 'No gradle remediations to apply.'\n")
