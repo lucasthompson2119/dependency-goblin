@@ -96,7 +96,7 @@ check:vulnerabilities:
           #           "Upgrade to versions 1.2.3 or above."
           #           "Upgrade to 1.2.3."
           match = re.search(
-              r'[Uu]pgrade to (?:versions?\s+)?([0-9][^\s,]+?)(?:\s+or above)?[.,\s]',
+              r'[Uu]pgrade to (?:versions?\s+)?([^\s,]+)',
               solution
           )
           to_ver = match.group(1).rstrip('.,') if match else None
@@ -135,10 +135,32 @@ check:vulnerabilities:
                   # Gradle uses : as group/artifact separator; the report uses /
                   artifact = pkg_name.split('/')[-1]
                   sh.write(f"echo \"  Patching {pkg_name}: {from_ver} -> {to_ver} in {loc_file}\"\n")
-                  sh.write(
-                      f"sed -i 's/{re.escape(artifact)}:{re.escape(from_ver)}"
-                      f"/{artifact}:{to_ver}/g' {loc_file}\n"
+                  escaped_artifact = re.escape(artifact)
+
+                  sh.write(f"""python3 << 'PYEOF'
+                  from pathlib import Path
+                  import re
+
+                  path = Path("{loc_file}")
+                  text = path.read_text()
+
+                  pattern = re.compile(
+                      r"(implementation\\(['\\"](?:[^:'\\"]+:)?{escaped_artifact}['\\"]\\)\\s*\\{{[^}}]*?require\\s+['\\"])"
+                      r"([^'\\"]+)"
+                      r"(['\\"])",
+                      re.DOTALL
                   )
+
+                  updated = pattern.sub(
+                      rf"\\g<1>{to_ver}\\3",
+                      text
+                  )
+
+                  path.write_text(updated)
+
+                  print("Updated {artifact} -> {to_ver}")
+                  PYEOF
+                  """)
                   sh.write(f"echo \"  Done.\"\n\n")
           else:
               sh.write("echo 'No gradle remediations to apply.'\n")
