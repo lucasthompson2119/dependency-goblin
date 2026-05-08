@@ -486,8 +486,8 @@ create:merge-request:
       echo "========================================"
 
       if [ -z "$FIX_BRANCH" ]; then
-        echo "FIX_BRANCH is empty — no branch ready for MR"
-        exit 1
+        echo "FIX_BRANCH is empty — no need for MR"
+        exit 0
       fi
 
       FIXED_ITEMS=""
@@ -508,7 +508,8 @@ create:merge-request:
         --data "title: "fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})" \
         --data "description: "## Automated Vulnerability Remediation\n\nThis MR was automatically created by pipeline [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL}) after the daily dependency scan detected CVEs.\n\n### Changes\n${FIXED_ITEMS}\n### Validation\n- Lint passed (inline with upgrade)\n- Build passed\n- Tests passed\n\nPlease review the dependency diff before merging." \
         --data "assignee_id: ${ASSIGNEE_USER_ID}" \
-        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests")
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests"
+        )
 
       echo "Raw API response:"
       echo "$RESPONSE"
