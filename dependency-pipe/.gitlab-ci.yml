@@ -79,7 +79,11 @@ check:vulnerabilities:
           loc       = v.get('location', {})
           loc_file  = loc.get('file', '')
           dep       = loc.get('dependency', {})
-          pkg_name  = dep.get('package', {}).get('name', 'unknown')
+          pkg = dep.get('package', {})
+          if isinstance(pkg, dict):
+            pkg_name = pkg.get('name', 'unknown')
+          else:
+            pkg_name = str(pkg or 'unknown')
           from_ver  = dep.get('version', '')
           solution  = v.get('solution', '')
           severity  = v.get('severity', '')
