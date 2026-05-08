@@ -498,11 +498,9 @@ create:merge-request:
       echo -e "$FIXED_ITEMS"
 
       echo "Sending MR creation request..."
-      RESPONSE=$(curl --silent --show-error \
+      RESPONSE=$(curl --show-error \
         --request POST \
         --header "PRIVATE-TOKEN: ${DEPENDENCY_SAVIOR_TOKEN}" \
-        --header "Content-Type: application/json" \
-        --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
         --data "{
           \"source_branch\": \"${FIX_BRANCH}\",
           \"target_branch\": \"${CI_DEFAULT_BRANCH}\",
@@ -511,6 +509,7 @@ create:merge-request:
           \"assignee_id\": ${ASSIGNEE_USER_ID},
           \"labels\": \"security,automated,dependencies\",
           \"remove_source_branch\": true
+        --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
         }")
 
       echo "Raw API response:"
@@ -532,3 +531,4 @@ create:merge-request:
       echo "========================================"
       echo "  Merge request created: $MR_URL"
       echo "========================================"
+
