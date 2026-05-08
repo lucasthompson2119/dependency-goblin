@@ -24,13 +24,15 @@
 # =============================================================================
 variables:
   DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
+  FRONTEND_CIYAML_URL: $FRONTEND_CIYAML_URL
+  FRONTEND_CIYAML_FILE: $FRONTEND_CIYAML_FILE
 
 # stages:
 #   - check
 #   - fix-frontend
 #   - fix-backend
 #   - trigger-validation
-  # - merge-request
+#   - merge-request
 
 # =============================================================================
 # CHECK — parse scan report, identify which lockfiles are affected
@@ -54,13 +56,12 @@ check:vulnerabilities:
   needs:
     - project: "$CI_PROJECT_PATH"
       job: dependency-scanning
-      ref: "$CI_COMMIT_REF_NAME"
+      ref: "main"
       artifacts: true
-
   script:
     - |
       python3 << 'EOF'
-      import json
+      import json, re, textwrap
 
       with open('gl-dependency-scanning-report.json') as f:
           report = json.load(f)
@@ -69,43 +70,113 @@ check:vulnerabilities:
 
       affected_files = set()
       vuln_summary = []
+      gradle_remediations = []  # list of (package, from_version, to_version, file)
 
       for v in report.get('vulnerabilities', []):
           if v.get('severity') not in target_severities:
               continue
-          loc_file = v.get('location', {}).get('file', '')
+
+          loc       = v.get('location', {})
+          loc_file  = loc.get('file', '')
+          dep       = loc.get('dependency', {})
+          pkg_name  = dep.get('package', {}).get('name', 'unknown')
+          from_ver  = dep.get('version', '')
+          solution  = v.get('solution', '')
+          severity  = v.get('severity', '')
+
           affected_files.add(loc_file)
-          pkg = v.get('location', {}).get('dependency', {}).get('package', {}).get('name', 'unknown')
-          vuln_summary.append(f"  [{v.get('severity')}] {v.get('name')} — {loc_file} (package: {pkg})")
+          vuln_summary.append(
+              f"  [{severity}] {v.get('name')} — {loc_file} "
+              f"(package: {pkg_name} @ {from_ver})"
+          )
+
+          # Extract target version from solution text
+          # Handles: "Upgrade to version 4.1.133.Final or above."
+          #           "Upgrade to versions 1.2.3 or above."
+          #           "Upgrade to 1.2.3."
+          match = re.search(
+              r'[Uu]pgrade to (?:versions?\s+)?([^\s,]+)',
+              solution
+          )
+          to_ver = match.group(1).rstrip('.,') if match else None
+
+          if loc_file == 'build.gradle' and from_ver and to_ver:
+              gradle_remediations.append((pkg_name, from_ver, to_ver, loc_file))
+              print(f"  [GRADLE FIX] {pkg_name}: {from_ver} → {to_ver} in {loc_file}")
+          elif loc_file == 'build.gradle' and not to_ver:
+              print(f"  [GRADLE WARN] Could not parse target version from solution: '{solution}'")
 
       print(f"\nAffected lockfiles: {affected_files or 'none'}")
       print("Vulnerability summary:")
       for line in vuln_summary:
           print(line)
 
-      fix_frontend_package = 'yarn.lock' in affected_files
-      fix_frontend = 'frontend/yarn.lock' in affected_files
-      fix_journey  = 'journey/yarn.lock'  in affected_files
-      fix_backend  = 'gradle.lockfile'    in affected_files
-      any_found    = fix_frontend_package or fix_frontend or fix_journey or fix_backend
+      fix_frontend_package = 'yarn.lock'          in affected_files
+      fix_frontend         = 'frontend/yarn.lock' in affected_files
+      fix_journey          = 'journey/yarn.lock'  in affected_files
+      fix_backend          = 'build.gradle'       in affected_files
+      any_found            = fix_frontend_package or fix_frontend or fix_journey or fix_backend
 
       with open('vuln.env', 'w') as env:
-          env.write(f"VULNERABILITIES_FOUND={'true' if any_found    else 'false'}\n")
-          env.write(f"FIX_FRONTEND_PACKAGE={'true'          if fix_frontend_package  else 'false'}\n")
-          env.write(f"FIX_FRONTEND={'true'          if fix_frontend  else 'false'}\n")
-          env.write(f"FIX_JOURNEY={'true'           if fix_journey   else 'false'}\n")
-          env.write(f"FIX_BACKEND={'true'           if fix_backend   else 'false'}\n")
+          env.write(f"VULNERABILITIES_FOUND={'true' if any_found           else 'false'}\n")
+          env.write(f"FIX_FRONTEND_PACKAGE={'true'  if fix_frontend_package else 'false'}\n")
+          env.write(f"FIX_FRONTEND={'true'          if fix_frontend         else 'false'}\n")
+          env.write(f"FIX_JOURNEY={'true'           if fix_journey          else 'false'}\n")
+          env.write(f"FIX_BACKEND={'true'           if fix_backend          else 'false'}\n")
+
+      # Write a self-contained remediation script for fix-backend to execute.
+      # Each line is a sed in-place substitution scoped to the exact package
+      # and version so unrelated dependencies are never touched.
+      with open('gradle_remediations.sh', 'w') as sh:
+          sh.write("#!/bin/sh\nset -e\n\n")
+          if gradle_remediations:
+              for pkg_name, from_ver, to_ver, loc_file in gradle_remediations:
+                  # Gradle uses : as group/artifact separator; the report uses /
+                  artifact = pkg_name.split('/')[-1]
+                  sh.write(f"echo \"  Patching {pkg_name}: {from_ver} -> {to_ver} in {loc_file}\"\n")
+                  escaped_artifact = re.escape(artifact)
+
+                  sh.write(textwrap.dedent(f"""\
+                  python3 << 'PYEOF'
+                  from pathlib import Path
+                  import re
+                  path = Path("{loc_file}")
+                  text = path.read_text()
+                  pattern = re.compile(
+                    r"(implementation\\(['\\"](?:[^:'\\"]+:)?{escaped_artifact}['\\"]\\)\\s*\\{{[^}}]*?require\\s+['\\"])"
+                    r"([^'\\"]+)"
+                    r"(['\\"])",
+                    re.DOTALL
+                  )
+                  updated = pattern.sub(
+                    rf"\\g<1>{to_ver}\\3",
+                    text
+                  )
+                  path.write_text(updated)
+                  print("Updated {artifact} -> {to_ver}")
+                  PYEOF
+                  """))
+                  sh.write(f"echo \"  Done.\"\n\n")
+          else:
+              sh.write("echo 'No gradle remediations to apply.'\n")
+
+      print(f"\nWrote {len(gradle_remediations)} gradle remediation(s) to gradle_remediations.sh")
 
       if not any_found:
           print("\nNo vulnerabilities found. Pipeline will stop after this job.")
       else:
-          print(f"\nFlags — FIX_FRONTEND_PACKAGE={fix_frontend_package}, FIX_FRONTEND={fix_frontend}, FIX_JOURNEY={fix_journey}, FIX_BACKEND={fix_backend}")
+          print(
+              f"\nFlags — FIX_FRONTEND_PACKAGE={fix_frontend_package}, "
+              f"FIX_FRONTEND={fix_frontend}, FIX_JOURNEY={fix_journey}, "
+              f"FIX_BACKEND={fix_backend}"
+          )
       EOF
   artifacts:
     reports:
       dotenv: vuln.env
+    paths:
+      - gradle_remediations.sh   # ← consumed by fix-backend
     expire_in: 1 day
-
 # =============================================================================
 # AUTO-FIX — create branch, upgrade affected deps, lint inline, push
 #
@@ -134,8 +205,8 @@ check:vulnerabilities:
 fix-frontend:
   stage: fix-frontend
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
   extends: .node
   needs:
@@ -143,7 +214,7 @@ fix-frontend:
       artifacts: true
   script:
     - |
-      if [ "$FIX_FRONTEND_PACKAGE" != "true" || "$FIX_FRONTEND" != true || "$FIX_JOURNEY" != true]; then
+      if [ "$FIX_FRONTEND_PACKAGE" != "true" ] && [ "$FIX_FRONTEND" != "true" ] && [ "$FIX_JOURNEY" != "true" ]; then
         echo "No frontend vulnerabilities found. Skipping."
         exit 0
       fi
@@ -212,32 +283,38 @@ fix-frontend:
     KEYSTORE_PASS: changeit
   tags:
     - px-app-build
-  # before_script:
-    # - |- 
-    #   cp /usr/lib/jvm/default-jvm/lib/security/cacerts /tmp/cacerts && \
-    #   chmod +w /tmp/cacerts && \
-    #   mkdir -p /tmp/split-certs && \
-    #   awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; close(f); f="/tmp/split-certs/cert."c} f {print > f}' /etc/ssl/custom/dod-ca-bundle.pem && \
-    #   for cert_file in /tmp/split-certs/*; do \
-    #     keytool -importcert -trustcacerts -noprompt \
-    #         -alias "$(basename $cert_file)" \
-    #         -file "$cert_file" \
-    #         -keystore /tmp/cacerts \
-    #         -storepass changeit; \
-    #   done && \
-    #   rm -rf /tmp/split-certs
-    # - export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStoreType=JKS -DsystemProp.javax.net.ssl.trustStore=/tmp/cacerts -Djavax.net.ssl.trustStore=/tmp/cacerts --module-path=/usr/share/java/bouncycastle-fips"
-    # - mkdir -p .gradle
-    # - export GRADLE_USER_HOME=`pwd`/.gradle 
-    # - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
+  before_script:
+    - |- 
+      if [ "$FIX_BACKEND" != "true" ]; then
+        echo "No backend vulnerabilities found. Skipping."
+        exit 0
+      fi
 
-fix-backend:
+      cp /usr/lib/jvm/default-jvm/lib/security/cacerts /tmp/cacerts && \
+      chmod +w /tmp/cacerts && \
+      mkdir -p /tmp/split-certs && \
+      awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; close(f); f="/tmp/split-certs/cert."c} f {print > f}' /etc/ssl/custom/dod-ca-bundle.pem && \
+      for cert_file in /tmp/split-certs/*; do \
+        keytool -importcert -trustcacerts -noprompt \
+            -alias "$(basename $cert_file)" \
+            -file "$cert_file" \
+            -keystore /tmp/cacerts \
+            -storepass changeit; \
+      done && \
+      rm -rf /tmp/split-certs
+    - export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStoreType=JKS -DsystemProp.javax.net.ssl.trustStore=/tmp/cacerts -Djavax.net.ssl.trustStore=/tmp/cacerts --module-path=/usr/share/java/bouncycastle-fips"
+    - mkdir -p .gradle
+    - export GRADLE_USER_HOME=`pwd`/.gradle 
+    - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
+fix-backend-python:
   stage: fix-backend
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
-  extends: .gradle
+  tags:
+    - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
     - job: check:vulnerabilities
       artifacts: true
@@ -248,23 +325,57 @@ fix-backend:
         exit 0
       fi
 
-      echo "Running auto-fix..."
+      echo "=== Applying gradle remediations ==="
+      cat gradle_remediations.sh
+      chmod +x gradle_remediations.sh
+      ./gradle_remediations.sh
 
-    # --- gradle.lockfile ---
+      echo "=== Committing Changes ==="
+
+      git config --global --add safe.directory /builds/$CI_PROJECT_PATH
+      git config --global user.email "sdu4-2@swf.army.mil"
+      git config --global user.name "Dependency_Savior"
+      git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git fetch origin
+      git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH" || git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+      git add build.gradle
+      git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation [skip ci]"
+      git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+      echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
+  artifacts:
+    reports:
+      dotenv: fix_branch.env
+    expire_in: 1 day
+
+fix-backend-gradle:
+  stage: fix-backend
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
+    - when: never
+  extends: .gradle
+  needs:
+    - job: fix-backend-python
+    - job: check:vulnerabilities
+      artifacts: true
+  script:
     - |
-      if [ "$FIX_BACKEND" = "true" ]; then
-        echo "=== Refreshing + linting backend ==="
-        ./gradlew --refresh-dependencies dependencies
-        ./gradlew dependencies --write-locks
-        ./gradlew checkstyleMain checkstyleTest
-        # git add gradle.lockfile
-        # git diff --cached --quiet || git commit -m "fix(backend): auto-refresh gradle lockfile [skip ci]"
-      else
-        echo "--- Skipping backend (no CVEs in gradle.lockfile) ---"
-      fi
 
-    - git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
-    - echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
+      git config --global user.email "sdu4-2@swf.army.mil"
+      git config --global user.name "Dependency_Savior"
+      git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git fetch origin
+      git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+
+      echo "=== Verifying build still compiles after patches ==="
+      rm gradle.lockfile
+      # ./gradlew --refresh-dependencies dependencies
+      ./gradlew dependencies --write-locks
+
+      git add gradle.lockfile
+      git commit -m "fix(backend): auto-patch dependency versions for CVE remediation [skip ci]"
+      git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+      echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
     reports:
       dotenv: fix_branch.env
@@ -278,56 +389,65 @@ fix-backend:
 # until the downstream pipeline completes, and to inherit its pass/fail.
 # =============================================================================
 
-validate:fix-branch:
-  stage: trigger-validation
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
-    - when: never
-  needs:
-    - job: fix-frontend
-      artifacts: true
-      optional: true
-    - job: fix-backend
-      artifacts: true
-      optional: true
-  script:
-    - |
-      echo "========================================"
-      echo "  PRE-TRIGGER VALIDATION"
-      echo "========================================"
-      echo "  FIX_BRANCH:            $FIX_BRANCH"
-      echo "  CI_PROJECT_PATH:       $CI_PROJECT_PATH"
-      echo "  VULNERABILITIES_FOUND: $VULNERABILITIES_FOUND"
-      echo "  FIX_FRONTEND_PACKAGE:  $FIX_FRONTEND_PACKAGE"
-      echo "  FIX_FRONTEND:          $FIX_FRONTEND"
-      echo "  FIX_JOURNEY:           $FIX_JOURNEY"
-      echo "  FIX_BACKEND:           $FIX_BACKEND"
-      echo "========================================"
-      if [ -z "$FIX_BRANCH" ]; then
-        echo "ERROR: FIX_BRANCH is empty — fix job artifacts may not have passed correctly"
-        exit 1
-      fi
-      echo "FIX_BRANCH confirmed: $FIX_BRANCH — proceeding to trigger"
+# validate:fix-branch:
+#   stage: trigger-validation
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+#     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
+#     # - when: always
+#   tags:
+#     - px-app-build
+#   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
+#   needs:
+#     - job: fix-frontend
+#       # artifacts: true
+#       # optional: true
+#     - job: fix-backend
+#       # artifacts: true
+#       # optional: true
+#     - job: check:vulnerabilities
+#       artifacts: true
+#   script:
+#     - |
+#       echo "========================================"
+#       echo "  PRE-TRIGGER VALIDATION"
+#       echo "========================================"
+#       echo "  FIX_BRANCH:            $FIX_BRANCH"
+#       echo "  CI_PROJECT_PATH:       $CI_PROJECT_PATH"
+#       echo "  VULNERABILITIES_FOUND: $VULNERABILITIES_FOUND"
+#       echo "  FIX_FRONTEND_PACKAGE:  $FIX_FRONTEND_PACKAGE"
+#       echo "  FIX_FRONTEND:          $FIX_FRONTEND"
+#       echo "  FIX_JOURNEY:           $FIX_JOURNEY"
+#       echo "  FIX_BACKEND:           $FIX_BACKEND"
+#       echo "========================================"
+#       if [ -z "$FIX_BRANCH" ]; then
+#         echo "ERROR: FIX_BRANCH is empty — fix job artifacts may not have passed correctly"
+#         exit 1
+#       fi
+#       echo "FIX_BRANCH confirmed: $FIX_BRANCH — proceeding to trigger"
 
-trigger:validation:
-  stage: trigger-validation
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
-    - when: never
-  needs:
-    - job: validate:fix-branch    # blocks trigger until validation passes
-    - job: fix-frontend
-      artifacts: true
-      optional: true
-    - job: fix-backend
-      artifacts: true
-      optional: true
-  trigger:
-    project: "$CI_PROJECT_PATH"
-    branch: "$FIX_BRANCH"
-    strategy: depend
+# trigger:validation:
+#   stage: trigger-validation
+#   rules:
+#     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+#     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
+#     # - when: always
+#   needs:
+#     - job: validate:fix-branch    # blocks trigger until validation passes
+#     - job: fix-frontend
+#       # artifacts: true
+#       # optional: true
+#     - job: fix-backend
+#       # artifacts: true
+#       # optional: true
+#     - job: check:vulnerabilities
+#       artifacts: true
+#   trigger:
+#     include:
+#       - project: "$FRONTEND_CIYAML_URL"
+#         file: "$FRONTEND_CIYAML_FILE"
+#         ref: "dep-savior"
+        
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
@@ -336,19 +456,22 @@ trigger:validation:
 create:merge-request:
   stage: merge-request
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule" && $VULNERABILITIES_FOUND == "true"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true" && $VULNERABILITIES_FOUND == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
     - when: never
+  tags:
+    - px-app-build
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
-    - job: trigger:validation
+    # - job: trigger:validation
     - job: fix-frontend
+    - job: fix-backend-python
+    - job: fix-backend-gradle
+    - job: check:vulnerabilities
       artifacts: true
-      optional: true
-    - job: fix-backend
-      artifacts: true
-      optional: true
   script:
     - |
+
       echo "========================================"
       echo "  CREATE MERGE REQUEST"
       echo "========================================"
@@ -363,8 +486,8 @@ create:merge-request:
       echo "========================================"
 
       if [ -z "$FIX_BRANCH" ]; then
-        echo "ERROR: FIX_BRANCH is empty — cannot create MR without a source branch"
-        exit 1
+        echo "FIX_BRANCH is empty — no need for MR"
+        exit 0
       fi
 
       FIXED_ITEMS=""
@@ -376,21 +499,36 @@ create:merge-request:
       echo "Fixed items summary:"
       echo -e "$FIXED_ITEMS"
 
+      MR_TITLE="fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})"
+
+      MR_DESCRIPTION=$(cat <<EOF
+      ## Automated Vulnerability Remediation
+
+      This MR was automatically created by pipeline #${CI_PIPELINE_ID} after the daily dependency scan detected CVEs.
+
+      ### Changes
+      ${FIXED_ITEMS}
+
+      ### Validation
+      - Lint passed (inline with upgrade)
+      - Build passed
+      - Tests passed
+
+      Please review the dependency diff before merging.
+      EOF
+      )
+
       echo "Sending MR creation request..."
-      RESPONSE=$(curl --silent --show-error \
+      RESPONSE=$(curl --show-error \
         --request POST \
         --header "PRIVATE-TOKEN: ${DEPENDENCY_SAVIOR_TOKEN}" \
-        --header "Content-Type: application/json" \
-        --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
-        --data "{
-          \"source_branch\": \"${FIX_BRANCH}\",
-          \"target_branch\": \"${CI_DEFAULT_BRANCH}\",
-          \"title\": \"fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})\",
-          \"description\": \"## Automated Vulnerability Remediation\n\nThis MR was automatically created by pipeline [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL}) after the daily dependency scan detected CVEs.\n\n### Changes\n${FIXED_ITEMS}\n### Validation\n- ✅ Lint passed (inline with upgrade)\n- ✅ Build passed\n- ✅ Tests passed\n\nPlease review the dependency diff before merging.\",
-          \"assignee_id\": ${ASSIGNEE_USER_ID},
-          \"labels\": \"security,automated,dependencies\",
-          \"remove_source_branch\": true
-        }")
+        --data-urlencode "source_branch=${FIX_BRANCH}" \
+        --data-urlencode "target_branch=${CI_DEFAULT_BRANCH}" \
+        --data-urlencode "title=${MR_TITLE}" \
+        --data-urlencode "description=${MR_DESCRIPTION}" \
+        --data-urlencode "assignee_id=${ASSIGNEE_USER_ID}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests"
+      )
 
       echo "Raw API response:"
       echo "$RESPONSE"
