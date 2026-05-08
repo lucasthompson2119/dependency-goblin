@@ -487,7 +487,7 @@ create:merge-request:
       echo "========================================"
 
       if [ -z "$FIX_BRANCH" ]; then
-        echo "ERROR: FIX_BRANCH is empty — cannot create MR without a source branch"
+        echo "FIX_BRANCH is empty — no branch ready for MR"
         exit 1
       fi
 
