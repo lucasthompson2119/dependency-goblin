@@ -471,6 +471,7 @@ create:merge-request:
       artifacts: true
   script:
     - |
+
       echo "========================================"
       echo "  CREATE MERGE REQUEST"
       echo "========================================"
@@ -503,15 +504,11 @@ create:merge-request:
       RESPONSE=$(curl --show-error \
         --request POST \
         --header "PRIVATE-TOKEN: ${DEPENDENCY_SAVIOR_TOKEN}" \
-        --data "{
-          \"source_branch\": \"${FIX_BRANCH}\",
-          \"target_branch\": \"${CI_DEFAULT_BRANCH}\",
-          \"title\": \"fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})\",
-          \"description\": \"## Automated Vulnerability Remediation\n\nThis MR was automatically created by pipeline [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL}) after the daily dependency scan detected CVEs.\n\n### Changes\n${FIXED_ITEMS}\n### Validation\n- ✅ Lint passed (inline with upgrade)\n- ✅ Build passed\n- ✅ Tests passed\n\nPlease review the dependency diff before merging.\",
-          \"assignee_id\": ${ASSIGNEE_USER_ID},
-          \"labels\": \"security,automated,dependencies\",
-          \"remove_source_branch\": true
-          }" \
+        --data "source_branch: ${FIX_BRANCH}" \
+        --data "target_branch: ${CI_DEFAULT_BRANCH}" \
+        --data "title: "fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})" \
+        --data "description: "## Automated Vulnerability Remediation\n\nThis MR was automatically created by pipeline [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL}) after the daily dependency scan detected CVEs.\n\n### Changes\n${FIXED_ITEMS}\n### Validation\n- Lint passed (inline with upgrade)\n- Build passed\n- Tests passed\n\nPlease review the dependency diff before merging." \
+        --data "assignee_id: ${ASSIGNEE_USER_ID}" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
         )
 
