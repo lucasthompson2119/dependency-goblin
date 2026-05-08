@@ -320,6 +320,10 @@ fix-backend-python:
       artifacts: true
   script:
     - |
+      if [ "$FIX_BACKEND" != "true" ]; then
+        echo "No backend vulnerabilities found. Skipping."
+        exit 0
+      fi
 
       echo "=== Applying gradle remediations ==="
       cat gradle_remediations.sh
@@ -356,10 +360,6 @@ fix-backend-gradle:
       artifacts: true
   script:
     - |
-      if [ "$FIX_BACKEND" != "true" ]; then
-        echo "No backend vulnerabilities found. Skipping."
-        exit 0
-      fi
 
       git config --global user.email "sdu4-2@swf.army.mil"
       git config --global user.name "Dependency_Savior"
