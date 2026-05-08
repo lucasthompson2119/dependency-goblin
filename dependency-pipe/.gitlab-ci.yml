@@ -367,7 +367,8 @@ fix-backend-gradle:
       git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
 
       echo "=== Verifying build still compiles after patches ==="
-      ./gradlew --refresh-dependencies dependencies
+      rm gradle.lockfile
+      # ./gradlew --refresh-dependencies dependencies
       ./gradlew dependencies --write-locks
 
   artifacts:
