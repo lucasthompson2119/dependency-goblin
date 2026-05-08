@@ -509,7 +509,7 @@ create:merge-request:
           \"assignee_id\": ${ASSIGNEE_USER_ID},
           \"labels\": \"security,automated,dependencies\",
           \"remove_source_branch\": true
-        --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
         }")
 
       echo "Raw API response:"
