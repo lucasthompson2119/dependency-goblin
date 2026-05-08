@@ -285,6 +285,11 @@ fix-frontend:
     - px-app-build
   before_script:
     - |- 
+      if [ "$FIX_BACKEND" != "true" ]; then
+        echo "No backend vulnerabilities found. Skipping."
+        exit 0
+      fi
+
       cp /usr/lib/jvm/default-jvm/lib/security/cacerts /tmp/cacerts && \
       chmod +w /tmp/cacerts && \
       mkdir -p /tmp/split-certs && \
@@ -315,10 +320,6 @@ fix-backend-python:
       artifacts: true
   script:
     - |
-      if [ "$FIX_BACKEND" != "true" ]; then
-        echo "No backend vulnerabilities found. Skipping."
-        exit 0
-      fi
 
       echo "=== Applying gradle remediations ==="
       cat gradle_remediations.sh
@@ -510,7 +511,7 @@ create:merge-request:
           \"labels\": \"security,automated,dependencies\",
           \"remove_source_branch\": true
           }"
-        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
+        --url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
         )
 
       echo "Raw API response:"
