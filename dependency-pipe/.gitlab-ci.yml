@@ -56,7 +56,7 @@ rules:
 
 check:vulnerabilities:
   stage: check
-  rules: &dep_pipe_rules
+  rules: *dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -215,7 +215,7 @@ check:vulnerabilities:
 
 fix-frontend:
   stage: fix-frontend
-  rules: &dep_pipe_rules
+  rules: *dep_pipe_rules
   extends: .node
   needs:
     - job: check:vulnerabilities
@@ -314,7 +314,7 @@ fix-frontend:
 
 fix-backend-python:
   stage: fix-backend
-  rules: &dep_pipe_rules
+  rules: *dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -352,7 +352,7 @@ fix-backend-python:
 
 fix-backend-gradle:
   stage: fix-backend
-  rules: &dep_pipe_rules
+  rules: *dep_pipe_rules
   extends: .gradle
   needs:
     - job: fix-backend-python
@@ -388,7 +388,7 @@ fix-backend-gradle:
 
 create:merge-request:
   stage: merge-request
-  rules: &dep_pipe_rules
+  rules: *dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
