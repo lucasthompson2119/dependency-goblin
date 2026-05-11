@@ -38,13 +38,25 @@ variables:
 #   FIX_JOURNEY             — true if journey/yarn.lock is affected
 #   FIX_BACKEND             — true if gradle.lockfile is affected
 # =============================================================================
+.dep_pipe_rules: &dep_pipe_rules
+rules:
+  - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'
+  - if: '$GIT_WORKFLOW == "mr" && $CI_PIPELINE_SOURCE == "merge_request_event"'
+    when: never                                                          # ← explicit skip, not a catch-all never
+  - if: '$GIT_WORKFLOW == "mr" && $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    when: never
+  - if: '$GIT_WORKFLOW == "main" && $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    when: never
+  - if: '$GIT_WORKFLOW == "feature" && $CI_PIPELINE_SOURCE == "push"'
+    when: never
+  - if: '$GIT_WORKFLOW == null'
+    when: never
+
 
 check:vulnerabilities:
   stage: check
-  rules:
-  - if: '$CI_PIPELINE_SOURCE == "schedule"'
-  - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-  - when: never
+  rules: &dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -203,10 +215,7 @@ check:vulnerabilities:
 
 fix-frontend:
   stage: fix-frontend
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-    - when: never
+  rules: &dep_pipe_rules
   extends: .node
   needs:
     - job: check:vulnerabilities
@@ -302,12 +311,10 @@ fix-frontend:
     - mkdir -p .gradle
     - export GRADLE_USER_HOME=`pwd`/.gradle 
     - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
+
 fix-backend-python:
   stage: fix-backend
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-    - when: never
+  rules: &dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -345,10 +352,7 @@ fix-backend-python:
 
 fix-backend-gradle:
   stage: fix-backend
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-    - when: never
+  rules: &dep_pipe_rules
   extends: .gradle
   needs:
     - job: fix-backend-python
@@ -384,10 +388,7 @@ fix-backend-gradle:
 
 create:merge-request:
   stage: merge-request
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-    - when: never
+  rules: &dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
