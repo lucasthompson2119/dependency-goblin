@@ -14,8 +14,6 @@
 # Flow:
 #   check:vulnerabilities  →  parse scan report, set FIX_* flags
 #   auto:fix               →  upgrade affected deps + lint inline, push branch
-#   trigger:validation     →  fire standard pipeline on fix branch (runs your
-#                             existing test/build jobs — no duplication)
 #   create:merge-request   →  open MR only if triggered pipeline passed
 #
 # REQUIRED CI/CD VARIABLES (Settings → CI/CD → Variables in each project)
@@ -24,14 +22,11 @@
 # =============================================================================
 variables:
   DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
-  FRONTEND_CIYAML_URL: $FRONTEND_CIYAML_URL
-  FRONTEND_CIYAML_FILE: $FRONTEND_CIYAML_FILE
 
 # stages:
 #   - check
 #   - fix-frontend
 #   - fix-backend
-#   - trigger-validation
 #   - merge-request
 
 # =============================================================================
@@ -382,73 +377,6 @@ fix-backend-gradle:
       dotenv: fix_branch.env
     expire_in: 1 day
 
-# =============================================================================
-# TRIGGER VALIDATION — fire the project's standard pipeline on the fix branch
-#
-# This reuses your existing test/build jobs from the centralized include
-# without redefining them here. strategy: depend causes this job to block
-# until the downstream pipeline completes, and to inherit its pass/fail.
-# =============================================================================
-
-# validate:fix-branch:
-#   stage: trigger-validation
-#   rules:
-#     - if: '$CI_PIPELINE_SOURCE == "schedule"'
-#     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-#     # - when: always
-#   tags:
-#     - px-app-build
-#   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
-#   needs:
-#     - job: fix-frontend
-#       # artifacts: true
-#       # optional: true
-#     - job: fix-backend
-#       # artifacts: true
-#       # optional: true
-#     - job: check:vulnerabilities
-#       artifacts: true
-#   script:
-#     - |
-#       echo "========================================"
-#       echo "  PRE-TRIGGER VALIDATION"
-#       echo "========================================"
-#       echo "  FIX_BRANCH:            $FIX_BRANCH"
-#       echo "  CI_PROJECT_PATH:       $CI_PROJECT_PATH"
-#       echo "  VULNERABILITIES_FOUND: $VULNERABILITIES_FOUND"
-#       echo "  FIX_FRONTEND_PACKAGE:  $FIX_FRONTEND_PACKAGE"
-#       echo "  FIX_FRONTEND:          $FIX_FRONTEND"
-#       echo "  FIX_JOURNEY:           $FIX_JOURNEY"
-#       echo "  FIX_BACKEND:           $FIX_BACKEND"
-#       echo "========================================"
-#       if [ -z "$FIX_BRANCH" ]; then
-#         echo "ERROR: FIX_BRANCH is empty — fix job artifacts may not have passed correctly"
-#         exit 1
-#       fi
-#       echo "FIX_BRANCH confirmed: $FIX_BRANCH — proceeding to trigger"
-
-# trigger:validation:
-#   stage: trigger-validation
-#   rules:
-#     - if: '$CI_PIPELINE_SOURCE == "schedule"'
-#     - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'  # manual trigger override for testing and devs
-#     # - when: always
-#   needs:
-#     - job: validate:fix-branch    # blocks trigger until validation passes
-#     - job: fix-frontend
-#       # artifacts: true
-#       # optional: true
-#     - job: fix-backend
-#       # artifacts: true
-#       # optional: true
-#     - job: check:vulnerabilities
-#       artifacts: true
-#   trigger:
-#     include:
-#       - project: "$FRONTEND_CIYAML_URL"
-#         file: "$FRONTEND_CIYAML_FILE"
-#         ref: "dep-savior"
-        
 
 # # =============================================================================
 # # MERGE REQUEST — only reached if trigger:validation passed
@@ -464,7 +392,6 @@ create:merge-request:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
-    # - job: trigger:validation
     - job: fix-frontend
     - job: fix-backend-python
     - job: fix-backend-gradle
