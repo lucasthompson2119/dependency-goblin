@@ -6,7 +6,7 @@ stages:
 
 # Templates
 .gradle:
-  image: $CI_BASE_IMAGE_JDK_17
+  image: $CI_BASE_IMAGE_JDK_25
   variables:
     ALLOW_EMPTY_PASSWORD: "yes"
     KEYSTORE: /usr/lib/jvm/default-jvm/lib/security/cacerts
