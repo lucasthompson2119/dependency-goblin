@@ -412,6 +412,9 @@ create:merge-request:
       echo "  FIX_FRONTEND:         $FIX_FRONTEND"
       echo "  FIX_JOURNEY:          $FIX_JOURNEY"
       echo "  FIX_BACKEND:          $FIX_BACKEND"
+      echo "  GIT_WORKFLOW:         $GIT_WORKFLOW"
+      $GIT_WORKFLOW = "mr"
+      echo "  GIT_WORKFLOW:         $GIT_WORKFLOW"
       echo "========================================"
 
       if [ -z "$FIX_BRANCH" ]; then
