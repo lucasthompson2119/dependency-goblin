@@ -271,7 +271,7 @@ fix-frontend:
       dotenv: fix_branch.env
     expire_in: 1 day
 
-.gradle:
+.gradle-dep:
   image: $CI_BASE_IMAGE_JDK_25
   variables:
     ALLOW_EMPTY_PASSWORD: "yes"
@@ -344,7 +344,7 @@ fix-backend-python:
 fix-backend-gradle:
   stage: fix-backend
   <<: *dep_pipe_rules
-  extends: .gradle
+  extends: .gradle-dep
   needs:
     - job: fix-backend-python
     - job: check:vulnerabilities
