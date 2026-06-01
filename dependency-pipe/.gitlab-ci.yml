@@ -272,7 +272,7 @@ fix-frontend:
     expire_in: 1 day
 
 .gradle-dep:
-  image: $CI_BASE_IMAGE_JDK_25
+  image: $CI_BASE_IMAGE_JDK_21
   variables:
     ALLOW_EMPTY_PASSWORD: "yes"
     KEYSTORE: /usr/lib/jvm/default-jvm/lib/security/cacerts
