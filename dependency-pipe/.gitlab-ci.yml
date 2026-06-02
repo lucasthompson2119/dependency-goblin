@@ -1,56 +1,169 @@
 # =============================================================================
-# .gitlab-ci.yml — Vulnerability Auto-Remediation Template
+# Vulnerability Auto-Remediation Pipeline
 #
-# Intended usage — in each project's .gitlab-ci.yml:
+# This file lives in its own repo and is pulled into consuming projects via
+# include:. It should never be the only include — it expects test/build/publish
+# jobs to exist from a separate centralized pipeline include.
+#
+# Consuming project .gitlab-ci.yml example:
+#    spec:
+#      inputs:
+#        choice:
+#          type: string
+#          options:
+#            - "None"
+#            - "RUN_DEPENDENCY_GOBLIN"
+#          default: "None"
+#
+#   stages:
+#     - check
+#     - fix-frontend
+#     - fix-backend
+#     - merge-request
+#     - test
+#     - build
+#     - publish
 #
 #   include:
-#     - project: 'your-group/centralized-pipelines'
-#       file: '/standard-pipeline.yml'    # your existing test/build/publish jobs
-#       ref: main
-#     - project: 'your-group/vuln-remediation'
-#       file: '/.gitlab-ci.yml'           # this file
-#       ref: main
+#     - project: "$FRONTEND_CIYAML_URL"
+#       file: "$FRONTEND_CIYAML_FILE"
+#       ref: "main"
 #
-# Flow:
-#   check:vulnerabilities  →  parse scan report, set FIX_* flags
-#   auto:fix               →  upgrade affected deps + lint inline, push branch
-#   create:merge-request   →  open MR only if triggered pipeline passed
+#     - project: "$DEPENDENCY_PIPE_CIYAML_URL"
+#       file: "$DEPENDENCY_PIPE_CIYAML_FILE"
+#       ref: "main"
 #
-# REQUIRED CI/CD VARIABLES (Settings → CI/CD → Variables in each project)
-#   GL_PAT             Personal Access Token (api + write_repository scopes) [masked]
-#   ASSIGNEE_USER_ID   GitLab numeric user ID to assign the MR to
+# Pipeline flow (schedule / manual web trigger only):
+#   check:vulnerabilities   parse the latest dependency scan report, identify
+#                           which lockfiles are affected, write FIX_* flags and
+#                           a gradle remediation shell script as artifacts
+#   fix-frontend            upgrade affected yarn.lock files, commit to fix branch
+#   fix-backend-python      apply version patches to build.gradle via Python,
+#                           commit to fix branch
+#   fix-backend-gradle      regenerate gradle.lockfile against patched build.gradle,
+#                           commit to fix branch
+#   create:merge-request    open an MR from the fix branch to default branch
+#
+# Required CI/CD variables (Settings → CI/CD → Variables in each project):
+#   DEPENDENCY_GOBLIN_TOKEN   PAT with api + write_repository scopes [masked]
 # =============================================================================
+
 variables:
-  DEPENDENCY_SAVIOR_TOKEN: "$DEPENDENCY_SAVIOR_TOKEN"
-
-# stages:
-#   - check
-#   - fix-frontend
-#   - fix-backend
-#   - merge-request
+  # Re-declare so the token is available in all jobs without referencing
+  # the secret name directly in every script block.
+  DEPENDENCY_GOBLIN_TOKEN: "$DEPENDENCY_GOBLIN_TOKEN"
 
 # =============================================================================
-# CHECK — parse scan report, identify which lockfiles are affected
+# Shared rules template
 #
-# Produces dotenv flags:
-#   VULNERABILITIES_FOUND   — true if any CVEs exist
-#   FIX_FRONTEND            — true if frontend/yarn.lock is affected
-#   FIX_JOURNEY             — true if journey/yarn.lock is affected
-#   FIX_BACKEND             — true if gradle.lockfile is affected
+# All dep-pipe jobs extend this so they only activate on:
+#   - Scheduled pipeline runs (the daily CVE scan)
+#   - Manual web triggers where RUN_DEPENDENCY_GOBLIN=true (for developer testing)
+#   - Triggered child pipelines where RUN_DEPENDENCY_GOBLIN=true (future use)
+#
+# Any other pipeline source (push, merge_request_event, etc.) hits when:never,
+# leaving those pipelines free to run only the test/build jobs from the other
+# centralized include without interference from this file.
 # =============================================================================
-.dep_pipe_rules: &dep_pipe_rules
+
+.dep_pipe_rules:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEP_PIPE == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_DEPENDENCY_GOBLIN == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "pipeline" && $RUN_DEPENDENCY_GOBLIN == "true"'
     - when: never
 
+# =============================================================================
+# Node base template
+#
+# Shared image, runner tag, cache config, and CA certificate setup for all
+# jobs that invoke yarn. The combined CA file is required because the runner
+# environment uses custom DoD CA bundles that Node/npm/yarn don't trust by
+# default.
+# =============================================================================
+
+.node:
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips:20.20-dev
+  tags:
+    - px-app-build
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+    policy: pull
+  before_script:
+    - |
+      export COMBINED_CA="$CI_PROJECT_DIR/combined-ca.crt"
+      cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/custom/dod-ca-bundle.pem > "$COMBINED_CA"
+      export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
+      npm config set cafile "$COMBINED_CA"
+      yarn config set cafile "$COMBINED_CA"
+
+# =============================================================================
+# Gradle base template
+#
+# -----------------------------------------------------------------------------
+# THIS IS DIFFERENT THAN THE .gradle USED ELSEWHERE!  The beginning of the
+# before_script includes logic for checking the $FIX_BACKEND env that will
+# break other jobs if used, thus this is called ".gradle-dep" whereas the
+# image used for the test and build for backend is ".gradle"
+# -----------------------------------------------------------------------------
+#
+# Shared image, runner tag, and JVM setup for all jobs that invoke gradlew.
+# The before_script does three things:
+#   1. Splits the DoD CA bundle into individual certs and imports each into
+#      the JVM truststore so Gradle can reach internal artifact registries.
+#   2. Sets JAVA_TOOL_OPTIONS to point the JVM at the updated truststore.
+#   3. Redirects the Gradle wrapper download URL to the internal mirror so
+#      the runner doesn't need external internet access.
+# =============================================================================
+
+.gradle-dep:
+  image: $CI_BASE_IMAGE_JDK_21
+  variables:
+    ALLOW_EMPTY_PASSWORD: "yes"
+    KEYSTORE: /usr/lib/jvm/default-jvm/lib/security/cacerts
+    KEYSTORE_PASS: changeit
+  tags:
+    - px-app-build
+  before_script:
+    - |-
+      if [ "$FIX_BACKEND" != "true" ]; then
+        echo "No backend vulnerabilities found. Skipping."
+        exit 0
+      fi
+
+      cp /usr/lib/jvm/default-jvm/lib/security/cacerts /tmp/cacerts && \
+      chmod +w /tmp/cacerts && \
+      mkdir -p /tmp/split-certs && \
+      awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; close(f); f="/tmp/split-certs/cert."c} f {print > f}' /etc/ssl/custom/dod-ca-bundle.pem && \
+      for cert_file in /tmp/split-certs/*; do \
+        keytool -importcert -trustcacerts -noprompt \
+            -alias "$(basename $cert_file)" \
+            -file "$cert_file" \
+            -keystore /tmp/cacerts \
+            -storepass changeit; \
+      done && \
+      rm -rf /tmp/split-certs
+    - export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStoreType=JKS -DsystemProp.javax.net.ssl.trustStore=/tmp/cacerts -Djavax.net.ssl.trustStore=/tmp/cacerts --module-path=/usr/share/java/bouncycastle-fips"
+    - mkdir -p .gradle
+    - export GRADLE_USER_HOME=`pwd`/.gradle
+    - sed -i 's#https\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
+
+# =============================================================================
+# STAGE: check
+# =============================================================================
 
 check:vulnerabilities:
   stage: check
-  <<: *dep_pipe_rules
+  extends: .dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
+  # Pull the scan report artifact from the most recent dependency-scanning job
+  # on main. This job does not run the scan itself — it consumes the report
+  # produced by GitLab's built-in dependency scanning job which runs separately
+  # on a schedule in each project.
   needs:
     - project: "$CI_PROJECT_PATH"
       job: dependency-scanning
@@ -61,83 +174,306 @@ check:vulnerabilities:
       python3 << 'EOF'
       import json, re, textwrap
 
+      # -------------------------------------------------------------------------
+      # Load the scan report
+      #
+      # gl-dependency-scanning-report.json is pulled from the dependency-scanning
+      # job artifact declared in needs: above. It is the standard GitLab
+      # dependency scanning output and contains a top-level "vulnerabilities"
+      # array where each entry describes one CVE found in one dependency.
+      # -------------------------------------------------------------------------
       with open('gl-dependency-scanning-report.json') as f:
           report = json.load(f)
 
+      # -------------------------------------------------------------------------
+      # Severity filter
+      #
+      # Only process vulnerabilities at these severity levels. "Unknown" and
+      # "Info" are intentionally excluded — they are either unscored advisories
+      # or informational notices that don't represent an exploitable risk.
+      # Change this set to tighten or loosen the filter (e.g. remove 'Low' to
+      # reduce noise in projects with many transitive low-severity findings).
+      # -------------------------------------------------------------------------
       target_severities = {'Critical', 'High', 'Medium', 'Low'}
 
+      # -------------------------------------------------------------------------
+      # Accumulators
+      #
+      # affected_files    — set of unique lockfile paths that have at least one
+      #                     qualifying CVE. Used at the end to set FIX_* flags.
+      #                     A set is used so duplicates are automatically dropped
+      #                     when the same file contains multiple CVEs.
+      #
+      # vuln_summary      — list of human-readable strings printed to the job log
+      #                     so the pipeline output shows a full CVE inventory.
+      #
+      # gradle_remediations — list of (pkg_name, from_ver, to_ver, file) tuples
+      #                     for every build.gradle vulnerability where a target
+      #                     version could be parsed. Fed into the shell script
+      #                     generator at the end of this script.
+      # -------------------------------------------------------------------------
       affected_files = set()
       vuln_summary = []
-      gradle_remediations = []  # list of (package, from_version, to_version, file)
+      gradle_remediations = []
 
+      # -------------------------------------------------------------------------
+      # Version comparison helper
+      #
+      # Converts a version string into a tuple of integers for reliable
+      # comparison. Non-numeric suffixes like ".Final" or ".RELEASE" are stripped
+      # because re.findall only pulls digit sequences, so "4.1.133.Final" and
+      # "4.1.133" both produce (4, 1, 133) and compare as equal. This is
+      # intentional — the suffix carries no ordering information relevant to
+      # deciding whether an upgrade is needed.
+      # -------------------------------------------------------------------------
+      def version_key(v):
+          return tuple(int(x) for x in re.findall(r'\d+', v))
+
+      # -------------------------------------------------------------------------
+      # Main vulnerability loop
+      #
+      # Iterates every entry in the report's "vulnerabilities" array. Each entry
+      # is a dict with keys like id, name, severity, solution, location, etc.
+      # Entries that don't meet the severity filter are skipped immediately so
+      # none of the extraction logic runs on them.
+      # -------------------------------------------------------------------------
       for v in report.get('vulnerabilities', []):
           if v.get('severity') not in target_severities:
               continue
 
-          loc       = v.get('location', {})
-          loc_file  = loc.get('file', '')
-          dep       = loc.get('dependency', {})
+          # ---------------------------------------------------------------------
+          # Location and dependency extraction
+          #
+          # "location" tells us which file the vulnerable dependency was found in
+          # (e.g. "frontend/yarn.lock" or "build.gradle"). This is the key field
+          # that determines which fix job needs to run.
+          #
+          # "dependency" contains the package name and the currently installed
+          # version. Both are needed to generate a precise regex substitution
+          # that targets only this specific package.
+          # ---------------------------------------------------------------------
+          loc      = v.get('location', {})
+          loc_file = loc.get('file', '')
+          dep      = loc.get('dependency', {})
+
+          # The "package" field has changed shape across GitLab analyzer versions.
+          # Older versions return a plain string; newer versions return a dict
+          # with a "name" key. Both are handled here so the pipeline works across
+          # GitLab version upgrades without modification.
           pkg = dep.get('package', {})
           if isinstance(pkg, dict):
-            pkg_name = pkg.get('name', 'unknown')
+              pkg_name = pkg.get('name', 'unknown')
           else:
-            pkg_name = str(pkg or 'unknown')
-          from_ver  = dep.get('version', '')
-          solution  = v.get('solution', '')
-          severity  = v.get('severity', '')
+              pkg_name = str(pkg or 'unknown')
 
+          from_ver = dep.get('version', '')
+          solution = v.get('solution', '')
+          severity = v.get('severity', '')
+
+          # Add this file to the affected set and append a summary line for the
+          # job log. The set deduplicates automatically, so if 10 CVEs all point
+          # to frontend/yarn.lock, it only appears once in affected_files.
           affected_files.add(loc_file)
           vuln_summary.append(
               f"  [{severity}] {v.get('name')} — {loc_file} "
               f"(package: {pkg_name} @ {from_ver})"
           )
 
-          # Extract target version from solution text
-          # Handles: "Upgrade to version 4.1.133.Final or above."
-          #           "Upgrade to versions 1.2.3 or above."
-          #           "Upgrade to 1.2.3."
-          match = re.search(
-              r'[Uu]pgrade to (?:versions?\s+)?([^\s,]+)',
+          # ---------------------------------------------------------------------
+          # Target version extraction
+          #
+          # The solution field is free-text written by the advisory author and
+          # may list a single version or one version per maintained release branch:
+          #
+          #   "Upgrade to version 4.1.133.Final or above."
+          #   "Upgrade to versions 6.4.2, 7.3.2, 8.0.5 or above."
+          #   "Upgrade to 1.2.3."
+          #
+          # Strategy:
+          #   1. Extract the full candidate string after "Upgrade to [version(s)]"
+          #   2. Split on whitespace and commas to get individual version tokens
+          #   3. Discard any candidate that is not strictly greater than the
+          #      currently installed version — these are fixes for release lines
+          #      older than what is installed and would be a downgrade
+          #   4. From the remaining candidates, select the minimum — the smallest
+          #      version that still resolves the CVE, keeping the upgrade as
+          #      conservative as possible
+          #
+          # Example: installed = 7.1.0, candidates = [6.4.2, 7.3.2, 8.0.5]
+          #   6.4.2 is discarded (less than 7.1.0)
+          #   remaining = [7.3.2, 8.0.5]
+          #   selected  = 7.3.2  (minimum of remaining — stays in the 7.x line)
+          #
+          # If the regex finds no match, to_ver is None and the vulnerability is
+          # logged as a warning but skipped from automated remediation — a human
+          # will need to resolve it manually.
+          #
+          # If all candidates are <= the installed version the package is already
+          # on a newer build than the advisory covers (e.g. a vendor-patched fork)
+          # and is also skipped with a warning.
+          # ---------------------------------------------------------------------
+          candidates_match = re.search(
+              r'[Uu]pgrade to (?:versions?\s+)?(.+?)(?:\s+or above)?\.?\s*$',
               solution
           )
-          to_ver = match.group(1).rstrip('.,') if match else None
 
+          to_ver = None
+          if candidates_match:
+              raw_candidates = candidates_match.group(1)
+
+              # Split on any combination of whitespace and commas, then keep
+              # only tokens that start with a digit (version numbers). This
+              # discards stray words like "or" that survive the outer regex.
+              candidates = [
+                  c.strip().rstrip('.,')
+                  for c in re.split(r'[\s,]+', raw_candidates)
+                  if re.match(r'\d', c.strip())
+              ]
+
+              if candidates:
+                  try:
+                      from_key = version_key(from_ver)
+
+                      # Discard candidates that would be a downgrade.
+                      upgradeable = [
+                          c for c in candidates
+                          if version_key(c) > from_key
+                      ]
+
+                      if upgradeable:
+                          to_ver = min(upgradeable, key=version_key)
+                          if len(candidates) > 1:
+                              # Log the selection reasoning when multiple
+                              # candidates were present so the job output
+                              # shows exactly why this version was chosen.
+                              print(
+                                  f"  [VERSION SELECT] {pkg_name} @ {from_ver} — "
+                                  f"candidates: {candidates} — selected: {to_ver}"
+                              )
+                      else:
+                          # All listed fix versions are <= installed. This can
+                          # happen with vendor-patched forks that have a higher
+                          # version than the upstream advisory targets.
+                          print(
+                              f"  [VERSION WARN] {pkg_name} @ {from_ver} — "
+                              f"all candidates {candidates} are <= installed version, skipping"
+                          )
+                  except (ValueError, TypeError) as e:
+                      # version_key() raises ValueError if a token produces no
+                      # digit segments at all (e.g. a codename like "Hoxton").
+                      print(
+                          f"  [VERSION WARN] {pkg_name} — could not compare versions "
+                          f"({from_ver} vs {candidates}): {e}"
+                      )
+
+          # Only build.gradle vulnerabilities need a patch script. yarn.lock
+          # vulnerabilities are handled by yarn upgrade which resolves versions
+          # automatically without needing explicit version targeting.
           if loc_file == 'build.gradle' and from_ver and to_ver:
               gradle_remediations.append((pkg_name, from_ver, to_ver, loc_file))
               print(f"  [GRADLE FIX] {pkg_name}: {from_ver} → {to_ver} in {loc_file}")
           elif loc_file == 'build.gradle' and not to_ver:
               print(f"  [GRADLE WARN] Could not parse target version from solution: '{solution}'")
 
+      # Print the full inventory to the job log for audit visibility.
       print(f"\nAffected lockfiles: {affected_files or 'none'}")
       print("Vulnerability summary:")
       for line in vuln_summary:
           print(line)
 
+      # -------------------------------------------------------------------------
+      # FIX_* flag derivation
+      #
+      # Each flag is set by checking whether that lockfile's path appears in the
+      # affected_files set. The path strings must exactly match what GitLab's
+      # scanner writes into the location.file field of the report — if a project
+      # stores its lockfile at a different relative path, add a new flag here and
+      # a corresponding if-block in the relevant fix job.
+      #
+      # any_found is the master gate: if no qualifying CVEs were found in any
+      # known lockfile, the pipeline prints a clean bill of health and all
+      # downstream fix jobs exit early when they check their own FIX_* flag.
+      # -------------------------------------------------------------------------
       fix_frontend_package = 'yarn.lock'          in affected_files
       fix_frontend         = 'frontend/yarn.lock' in affected_files
       fix_journey          = 'journey/yarn.lock'  in affected_files
       fix_backend          = 'build.gradle'       in affected_files
       any_found            = fix_frontend_package or fix_frontend or fix_journey or fix_backend
 
+      # -------------------------------------------------------------------------
+      # Write vuln.env (dotenv artifact)
+      #
+      # GitLab's dotenv artifact type makes these key=value pairs available as
+      # environment variables in any downstream job that declares:
+      #   needs:
+      #     - job: check:vulnerabilities
+      #       artifacts: true
+      #
+      # IMPORTANT: dotenv variables are only available at job runtime. They
+      # cannot be referenced in rules: conditions, which are evaluated before
+      # any jobs run. All gating on these flags must happen inside script: blocks.
+      # -------------------------------------------------------------------------
       with open('vuln.env', 'w') as env:
-          env.write(f"VULNERABILITIES_FOUND={'true' if any_found           else 'false'}\n")
-          env.write(f"FIX_FRONTEND_PACKAGE={'true'  if fix_frontend_package else 'false'}\n")
-          env.write(f"FIX_FRONTEND={'true'          if fix_frontend         else 'false'}\n")
-          env.write(f"FIX_JOURNEY={'true'           if fix_journey          else 'false'}\n")
-          env.write(f"FIX_BACKEND={'true'           if fix_backend          else 'false'}\n")
+          env.write(f"VULNERABILITIES_FOUND={'true' if any_found            else 'false'}\n")
+          env.write(f"FIX_FRONTEND_PACKAGE={'true'  if fix_frontend_package  else 'false'}\n")
+          env.write(f"FIX_FRONTEND={'true'          if fix_frontend          else 'false'}\n")
+          env.write(f"FIX_JOURNEY={'true'           if fix_journey           else 'false'}\n")
+          env.write(f"FIX_BACKEND={'true'           if fix_backend           else 'false'}\n")
 
-      # Write a self-contained remediation script for fix-backend to execute.
-      # Each line is a sed in-place substitution scoped to the exact package
-      # and version so unrelated dependencies are never touched.
+      # -------------------------------------------------------------------------
+      # Write gradle_remediations.sh (path artifact)
+      #
+      # Rather than passing multiple package/version pairs through environment
+      # variables (which would require complex encoding), this script generates
+      # a self-contained shell script as an artifact. fix-backend-python picks
+      # it up and executes it directly.
+      #
+      # The shell script contains one embedded Python heredoc per vulnerability.
+      # Python is used for the inner patch (rather than sed) because build.gradle
+      # dependency version declarations span multiple lines:
+      #
+      #   implementation('io.netty:netty-codec') {
+      #     version {
+      #       require "4.1.125.Final"
+      #     }
+      #   }
+      #
+      # sed operates line-by-line and cannot reliably match a version string that
+      # only appears inside a block associated with a specific package name above
+      # it. Python with re.DOTALL can match across the entire block, scoping the
+      # substitution to the correct dependency and leaving all others untouched.
+      #
+      # set -e at the top of the shell script causes it to abort immediately if
+      # any individual patch command fails, preventing a partial remediation from
+      # being committed silently.
+      # -------------------------------------------------------------------------
       with open('gradle_remediations.sh', 'w') as sh:
           sh.write("#!/bin/sh\nset -e\n\n")
           if gradle_remediations:
               for pkg_name, from_ver, to_ver, loc_file in gradle_remediations:
-                  # Gradle uses : as group/artifact separator; the report uses /
+                  # The scan report uses / as the group/artifact separator
+                  # (e.g. "io.netty/netty-codec") but build.gradle uses :
+                  # (e.g. "io.netty:netty-codec"). Split on / and take the last
+                  # segment to get just the artifact ID used in the regex below.
                   artifact = pkg_name.split('/')[-1]
                   sh.write(f"echo \"  Patching {pkg_name}: {from_ver} -> {to_ver} in {loc_file}\"\n")
+
+                  # re.escape ensures artifact names containing regex metacharacters
+                  # (dots, hyphens, etc.) are treated as literals in the pattern.
                   escaped_artifact = re.escape(artifact)
 
+                  # textwrap.dedent strips the leading indentation from the
+                  # heredoc so it is written flush-left in the shell script,
+                  # which is required for the PYEOF delimiter to be recognized.
+                  #
+                  # The regex pattern inside the heredoc matches a full
+                  # multi-line Gradle dependency block:
+                  #   Group 1: everything from implementation(...) up to the
+                  #            opening quote of the version string
+                  #   Group 2: the current version string (what gets replaced)
+                  #   Group 3: the closing quote character
+                  # The substitution keeps groups 1 and 3 and replaces group 2
+                  # with the target version, leaving the surrounding syntax intact.
                   sh.write(textwrap.dedent(f"""\
                   python3 << 'PYEOF'
                   from pathlib import Path
@@ -175,39 +511,27 @@ check:vulnerabilities:
       EOF
   artifacts:
     reports:
+      # dotenv artifacts are available as env vars in all downstream jobs
+      # that declare needs: with artifacts: true on this job.
       dotenv: vuln.env
     paths:
-      - gradle_remediations.sh   # ← consumed by fix-backend
+      # The remediation script is passed as a regular path artifact so
+      # fix-backend-python can execute it directly.
+      - gradle_remediations.sh
     expire_in: 1 day
-# =============================================================================
-# AUTO-FIX — create branch, upgrade affected deps, lint inline, push
-#
-# Single job to avoid parallel git commit conflicts.
-# Linting is run immediately after each upgrade so failures are caught
-# before the branch is pushed.
-# =============================================================================
 
-.node:
-  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips:20.20-dev
-  tags:
-    - px-app-build
-  cache:
-    key: ${CI_COMMIT_REF_SLUG}
-    paths:
-      - node_modules/
-    policy: pull
-  before_script:
-    - |
-      export COMBINED_CA="$CI_PROJECT_DIR/combined-ca.crt"
-      cat /etc/ssl/certs/ca-certificates.crt /etc/ssl/custom/dod-ca-bundle.pem > "$COMBINED_CA"
-      export NODE_EXTRA_CA_CERTS="$COMBINED_CA"
-      npm config set cafile "$COMBINED_CA"
-      yarn config set cafile "$COMBINED_CA"
+# =============================================================================
+# STAGE: fix-frontend
+# =============================================================================
 
 fix-frontend:
   stage: fix-frontend
-  <<: *dep_pipe_rules
-  extends: .node
+  # Inherits rules from .dep_pipe_rules and image/cache/CA setup from .node.
+  # GitLab merges parent keys with the job's own keys; the job's keys win
+  # on any conflict.
+  extends:
+    - .dep_pipe_rules
+    - .node
   needs:
     - job: check:vulnerabilities
       artifacts: true
@@ -218,59 +542,67 @@ fix-frontend:
         exit 0
       fi
 
-      echo "Running auto-fix..."
+      echo "Running frontend auto-fix..."
 
     - git config --global user.email "sdu4-2@swf.army.mil"
-    - git config --global user.name "Dependency_Savior"
-    - git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+    - git config --global user.name "Dependency_Goblin"
+    - git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
     - git fetch origin
-    - git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH"
 
-    # --- yarn.lock ---
+      # Create the shared fix branch off of the current default branch.
+      # fix-backend-python and fix-backend-gradle will push additional commits
+      # to this same branch, so the branch name is keyed to the pipeline ID
+      # to avoid collisions between concurrent remediation runs.
+    - git checkout -b "auto-fix-vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH"
+
+      # yarn.lock at repo root
     - |
       if [ "$FIX_FRONTEND_PACKAGE" = "true" ]; then
-        echo "=== Upgrading + linting frontend ==="
-        yarn upgrade 
+        echo "=== Upgrading yarn.lock ==="
+        yarn upgrade
         git add yarn.lock package.json
-        git diff --cached --quiet || git commit -m "fix(frontend_package): auto-upgrade yarn dependencies [skip ci]"
+        git diff --cached --quiet || git commit -m "fix(frontend_package): auto-upgrade yarn dependencies"
       else
-        echo "--- Skipping frontend (no CVEs in yarn.lock) ---"
+        echo "--- Skipping root yarn.lock (no CVEs) ---"
       fi
 
-    # --- frontend/yarn.lock ---
+      # frontend/yarn.lock
     - |
       if [ "$FIX_FRONTEND" = "true" ]; then
-        echo "=== Upgrading + linting frontend ==="
+        echo "=== Upgrading frontend/yarn.lock ==="
         cd frontend
-        yarn upgrade 
+        yarn upgrade
         cd ..
         git add frontend/yarn.lock frontend/package.json
-        git diff --cached --quiet || git commit -m "fix(frontend): auto-upgrade yarn dependencies [skip ci]"
+        git diff --cached --quiet || git commit -m "fix(frontend): auto-upgrade yarn dependencies"
       else
-        echo "--- Skipping frontend (no CVEs in frontend/yarn.lock) ---"
+        echo "--- Skipping frontend/yarn.lock (no CVEs) ---"
       fi
 
-    # --- journey/yarn.lock ---
+      # journey/yarn.lock
     - |
       if [ "$FIX_JOURNEY" = "true" ]; then
-        echo "=== Upgrading + linting journey ==="
+        echo "=== Upgrading journey/yarn.lock ==="
         cd journey
-        yarn upgrade 
+        yarn upgrade
         cd ..
         git add journey/yarn.lock journey/package.json
-        git diff --cached --quiet || git commit -m "fix(journey): auto-upgrade yarn dependencies [skip ci]"
+        git diff --cached --quiet || git commit -m "fix(journey): auto-upgrade yarn dependencies"
       else
-        echo "--- Skipping journey (no CVEs in journey/yarn.lock) ---"
+        echo "--- Skipping journey/yarn.lock (no CVEs) ---"
       fi
-    
-    - git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
-    - echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
 
+    - |
+      git push origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
+
+      # Write FIX_BRANCH so downstream jobs know which branch to check out.
+      echo "FIX_BRANCH=auto-fix-vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
     reports:
       dotenv: fix_branch.env
     expire_in: 1 day
 
+<<<<<<< HEAD
 .gradle-dep:
   image: $CI_BASE_IMAGE_JDK_21
   variables:
@@ -302,10 +634,19 @@ fix-frontend:
     - mkdir -p .gradle
     - export GRADLE_USER_HOME=`pwd`/.gradle 
     - sed -i 's#https\\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
+=======
+# =============================================================================
+# STAGE: fix-backend
+#
+# Split into two sequential jobs because they need different images:
+#   fix-backend-python  lightweight pipeline image — patches build.gradle
+#   fix-backend-gradle  JDK image — regenerates gradle.lockfile using gradlew
+# =============================================================================
+>>>>>>> 91275f8 (updated spring 4 branch)
 
 fix-backend-python:
   stage: fix-backend
-  <<: *dep_pipe_rules
+  extends: .dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -320,22 +661,27 @@ fix-backend-python:
       fi
 
       echo "=== Applying gradle remediations ==="
+      # Print the generated script before executing it for full visibility
+      # in the job log — makes it easy to see exactly what was patched.
       cat gradle_remediations.sh
       chmod +x gradle_remediations.sh
       ./gradle_remediations.sh
 
-      echo "=== Committing Changes ==="
-
+      echo "=== Committing build.gradle changes ==="
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
       git config --global user.email "sdu4-2@swf.army.mil"
-      git config --global user.name "Dependency_Savior"
-      git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git config --global user.name "Dependency_Goblin"
+      git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
       git fetch origin
-      git checkout -b "auto-fix/vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH" || git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+
+      # If fix-frontend already created this branch, check it out instead
+      # of trying to create it again.
+      git checkout -b "auto-fix-vuln-remediation-$CI_PIPELINE_ID" "origin/$CI_DEFAULT_BRANCH" || git checkout "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
+
       git add build.gradle
-      git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation [skip ci]"
-      git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
-      echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
+      git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation"
+      git push origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
+      echo "FIX_BRANCH=auto-fix-vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
     reports:
       dotenv: fix_branch.env
@@ -343,46 +689,50 @@ fix-backend-python:
 
 fix-backend-gradle:
   stage: fix-backend
-  <<: *dep_pipe_rules
-  extends: .gradle-dep
+  # Inherits rules from .dep_pipe_rules and JVM/Gradle setup from .gradle-dep.
+  extends:
+    - .dep_pipe_rules
+    - .gradle-dep
   needs:
     - job: fix-backend-python
     - job: check:vulnerabilities
       artifacts: true
   script:
     - |
-
       git config --global user.email "sdu4-2@swf.army.mil"
-      git config --global user.name "Dependency_Savior"
-      git remote set-url origin "https://oauth2:$DEPENDENCY_SAVIOR_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git config --global user.name "Dependency_Goblin"
+      git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
       git fetch origin
-      git checkout "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
+      git checkout "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
 
-      echo "=== Verifying build still compiles after patches ==="
+      echo "=== Regenerating gradle.lockfile ==="
+      # Delete the existing lockfile so --write-locks produces a clean one
+      # against the patched build.gradle rather than merging with stale entries.
       rm gradle.lockfile
-      # ./gradlew --refresh-dependencies dependencies
       ./gradlew dependencies --write-locks
 
       git add gradle.lockfile
-      git commit -m "fix(backend): auto-patch dependency versions for CVE remediation [skip ci]"
-      git push origin "auto-fix/vuln-remediation-$CI_PIPELINE_ID"
-      echo "FIX_BRANCH=auto-fix/vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
+      git diff --cached --quiet || git commit -m "fix(backend): regenerate gradle.lockfile after CVE remediation"
+      git push origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
+      echo "FIX_BRANCH=auto-fix-vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
     reports:
       dotenv: fix_branch.env
     expire_in: 1 day
 
-
-# # =============================================================================
-# # MERGE REQUEST — only reached if trigger:validation passed
-# # =============================================================================
+# =============================================================================
+# STAGE: merge-request
+# =============================================================================
 
 create:merge-request:
   stage: merge-request
-  <<: *dep_pipe_rules
+  extends: .dep_pipe_rules
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
+  # Needs all three fix jobs so FIX_BRANCH and all FIX_* flags are available.
+  # fix-frontend and fix-backend-python both write FIX_BRANCH to fix_branch.env;
+  # whichever ran last wins, but the value is identical so order doesn't matter.
   needs:
     - job: fix-frontend
     - job: fix-backend-python
@@ -391,35 +741,63 @@ create:merge-request:
       artifacts: true
   script:
     - |
+      echo "=== Cleaning up stale auto-fix branches ==="
+
+      git config --global --add safe.directory /builds/$CI_PROJECT_PATH
+      git config --global user.email "sdu4-2@swf.army.mil"
+      git config --global user.name "Dependency_Goblin"
+      git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git fetch origin
+
+      # Fetch all remote branches matching the prefix using git ls-remote,
+      # strip the refs/heads/ prefix, then exclude the current pipeline's branch.
+      STALE_BRANCHES=$(git ls-remote --heads origin 'auto-fix-vuln-remediation-*' \
+        | awk '{print $2}' \
+        | sed 's|refs/heads/||' \
+        | grep -v "auto-fix-vuln-remediation-$CI_PIPELINE_ID" \
+        || true)
+
+      if [ -z "$STALE_BRANCHES" ]; then
+        echo "No stale branches found."
+      else
+        echo "Stale branches to delete:"
+        echo "$STALE_BRANCHES"
+        echo "$STALE_BRANCHES" | while IFS= read -r branch; do
+          echo "  Deleting: $branch"
+          git push origin --delete "$branch"
+          echo "  Deleted successfully."
+        done
+      fi
 
       echo "========================================"
       echo "  CREATE MERGE REQUEST"
       echo "========================================"
-      echo "  FIX_BRANCH:   $FIX_BRANCH"
-      echo "  TARGET:       $CI_DEFAULT_BRANCH"
-      echo "  PROJECT ID:   $CI_PROJECT_ID"
-      echo "  API URL:      $CI_API_V4_URL"
+      echo "  FIX_BRANCH:           $FIX_BRANCH"
+      echo "  TARGET:               $CI_DEFAULT_BRANCH"
+      echo "  PROJECT ID:           $CI_PROJECT_ID"
+      echo "  API URL:              $CI_API_V4_URL"
       echo "  FIX_FRONTEND_PACKAGE: $FIX_FRONTEND_PACKAGE"
       echo "  FIX_FRONTEND:         $FIX_FRONTEND"
       echo "  FIX_JOURNEY:          $FIX_JOURNEY"
       echo "  FIX_BACKEND:          $FIX_BACKEND"
-      echo "  GIT_WORKFLOW:         $GIT_WORKFLOW"
-      export GIT_WORKFLOW="mr"
-      echo "  GIT_WORKFLOW:         $GIT_WORKFLOW"
       echo "========================================"
 
+      # If no fix job committed anything (e.g. all CVEs were already resolved
+      # on the branch), FIX_BRANCH will be empty and there is nothing to merge.
       if [ -z "$FIX_BRANCH" ]; then
-        echo "FIX_BRANCH is empty — no need for MR"
+        echo "FIX_BRANCH is empty — nothing was committed, skipping MR creation."
         exit 0
       fi
 
+      # Build the MR description dynamically based on which package managers
+      # were actually affected.
       FIXED_ITEMS=""
       [ "$FIX_FRONTEND_PACKAGE" = "true" ] && FIXED_ITEMS="${FIXED_ITEMS}- \`yarn.lock\` — upgraded via \`yarn upgrade\`\n"
       [ "$FIX_FRONTEND" = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`frontend/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
       [ "$FIX_JOURNEY"  = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`journey/yarn.lock\` — upgraded via \`yarn upgrade\`\n"
-      [ "$FIX_BACKEND"  = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`gradle.lockfile\` — refreshed via \`./gradlew --refresh-dependencies\`\n"
+      [ "$FIX_BACKEND"  = "true" ]         && FIXED_ITEMS="${FIXED_ITEMS}- \`build.gradle\` + \`gradle.lockfile\` — patched and regenerated\n"
 
-      echo "Fixed items summary:"
+      echo "Fixed items:"
       echo -e "$FIXED_ITEMS"
 
       MR_TITLE="fix: auto-remediate dependency vulnerabilities (pipeline #${CI_PIPELINE_ID})"
@@ -444,7 +822,7 @@ create:merge-request:
       echo "Sending MR creation request..."
       RESPONSE=$(curl --show-error \
         --request POST \
-        --header "PRIVATE-TOKEN: ${DEPENDENCY_SAVIOR_TOKEN}" \
+        --header "PRIVATE-TOKEN: ${DEPENDENCY_GOBLIN_TOKEN}" \
         --data "source_branch=${FIX_BRANCH}" \
         --data "target_branch=${CI_DEFAULT_BRANCH}" \
         --data "title=${MR_TITLE}" \
@@ -456,7 +834,9 @@ create:merge-request:
       echo "Raw API response:"
       echo "$RESPONSE"
 
-      # Check for API-level errors
+      # Parse the API response for errors. The GitLab API returns HTTP 200 even
+      # for logical errors (e.g. duplicate MR, invalid branch), so we check the
+      # response body rather than the HTTP status code.
       ERROR=$(echo "$RESPONSE" | python3 -c "
       import json,sys
       r = json.load(sys.stdin)
