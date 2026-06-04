@@ -618,6 +618,7 @@ fix-backend-python:
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
     - job: fix-frontend
+      artifacts: true
     - job: check:vulnerabilities
       artifacts: true
   script:
