@@ -593,7 +593,7 @@ fix-frontend:
       fi
 
     - |
-      git pull origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
+      git pull --fast-forward
       git push origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
 
       # Write FIX_BRANCH so downstream jobs know which branch to check out.
@@ -618,6 +618,7 @@ fix-backend-python:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
   needs:
+    - job: fix-frontend
     - job: check:vulnerabilities
       artifacts: true
   script:
