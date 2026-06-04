@@ -600,8 +600,6 @@ fix-frontend:
         echo "--- Skipping journey/yarn.lock (no CVEs) ---"
       fi
 
-    - |
-      git pull --rebase origin "$FIX_BRANCH"
       git push origin "$FIX_BRANCH"
 
       # Write FIX_BRANCH so downstream jobs know which branch to check out.
