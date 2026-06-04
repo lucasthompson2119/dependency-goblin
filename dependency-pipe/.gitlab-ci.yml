@@ -699,6 +699,7 @@ fix-backend-gradle:
       echo "=== Regenerating gradle.lockfile ==="
       # Delete the existing lockfile so --write-locks produces a clean one
       # against the patched build.gradle rather than merging with stale entries.
+      touch gradle.lockfile
       rm gradle.lockfile
       ./gradlew dependencies --write-locks
 
