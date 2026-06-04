@@ -593,7 +593,7 @@ fix-frontend:
       fi
 
     - |
-      git pull
+      git pull origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
       git push origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
 
       # Write FIX_BRANCH so downstream jobs know which branch to check out.
