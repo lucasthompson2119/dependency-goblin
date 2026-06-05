@@ -662,7 +662,6 @@ fix-backend-python:
 
       git add build.gradle
       git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation"
-      git pull --rebase origin "$FIX_BRANCH"
       git push origin "$FIX_BRANCH"
       echo "FIX_BRANCH=auto-fix-vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
@@ -705,8 +704,6 @@ fix-backend-gradle:
 
       git add gradle.lockfile
       git diff --cached --quiet || git commit -m "fix(backend): regenerate gradle.lockfile after CVE remediation"
-      git push origin "auto-fix-vuln-remediation-$CI_PIPELINE_ID"
-      git pull --rebase origin "$FIX_BRANCH"
       git push origin "$FIX_BRANCH"
       echo "FIX_BRANCH=auto-fix-vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
