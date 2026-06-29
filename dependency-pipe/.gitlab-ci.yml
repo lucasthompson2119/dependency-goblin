@@ -773,10 +773,22 @@ create:merge-request:
       echo "  FIX_BACKEND:          $FIX_BACKEND"
       echo "========================================"
 
-      # If no fix job committed anything (e.g. all CVEs were already resolved
-      # on the branch), FIX_BRANCH will be empty and there is nothing to merge.
-      if [ -z "$FIX_BRANCH" ]; then
-        echo "FIX_BRANCH is empty — nothing was committed, skipping MR creation."
+      # Diff check
+      #
+      # Check whether the fix branch exists on the remote at all — if no
+      # fix job committed anything the branch was never pushed. Then diff
+      # the fix branch against main. If there are no changed files there
+      # is nothing to merge and no MR should be opened.
+
+      if ! git ls-remote --exit-code --heads origin "$FIX_BRANCH" > /dev/null 2>&1; then
+        echo "Fix branch $FIX_BRANCH does not exist on remote — no commits were made, skipping MR creation."
+        exit 0
+      fi
+
+      CHANGED_FILES=$(git diff "origin/$CI_DEFAULT_BRANCH" "origin/$FIX_BRANCH" --name-only)
+
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No differences between $FIX_BRANCH and $CI_DEFAULT_BRANCH — skipping MR creation."
         exit 0
       fi
 
