@@ -369,11 +369,14 @@ check:vulnerabilities:
           # Only build.gradle vulnerabilities need a patch script. yarn.lock
           # vulnerabilities are handled by yarn upgrade which resolves versions
           # automatically without needing explicit version targeting.
-          if loc_file == ('build.gradle', 'gradle.lockfile') and from_ver and to_ver:
+          if loc_file in ('build.gradle', 'gradle.lockfile') and from_ver and to_ver:
               gradle_remediations.append((pkg_name, from_ver, to_ver, loc_file))
               print(f"  [GRADLE FIX] {pkg_name}: {from_ver} → {to_ver} in {loc_file}")
-          elif loc_file == ('build.gradle', 'gradle.lockfile') and not to_ver:
-              print(f"  [GRADLE WARN] Could not parse target version from solution: '{solution}'")
+          elif loc_file in ('build.gradle', 'gradle.lockfile') and not to_ver:
+              print(
+                  f"  [GRADLE WARN] Could not parse target version "
+                  f"from solution: '{solution}'"
+              )
 
       # Print the full inventory to the job log for audit visibility.
       print(f"\nAffected lockfiles: {affected_files or 'none'}")
