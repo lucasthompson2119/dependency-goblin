@@ -540,10 +540,56 @@ fix-frontend:
       artifacts: true
   script:
     - |
-      if [ "$FIX_FRONTEND_PACKAGE" != "true" ] && [ "$FIX_FRONTEND" != "true" ] && [ "$FIX_JOURNEY" != "true" ]; then
-        echo "No frontend vulnerabilities found. Skipping."
-        exit 0
+      # if [ "$FIX_FRONTEND_PACKAGE" != "true" ] && [ "$FIX_FRONTEND" != "true" ] && [ "$FIX_JOURNEY" != "true" ]; then
+      #   echo "No frontend vulnerabilities found. Skipping."
+      #   exit 0
+      # fi
+
+      # frontend/yarn.lock
+    - |
+      if [ "$FIX_FRONTEND" = "true" ]; then
+        echo "=== Upgrading frontend/yarn.lock ==="
+        (
+          cd frontend
+          yarn install --ignore-scripts
+          yarn upgrade --ignore-scripts
+        )
+        git add frontend/yarn.lock frontend/package.json
+        git diff --cached --quiet ||
+          git commit -m "fix(frontend): auto-upgrade yarn dependencies"
+      else
+        echo "--- Skipping frontend/yarn.lock (no CVEs) ---"
       fi
+
+      # Root
+    - |
+      if [ "$FIX_FRONTEND_PACKAGE" = "true" ]; then
+        echo "=== Upgrading yarn.lock ==="
+        yarn install --ignore-scripts
+        yarn upgrade --ignore-scripts
+
+        git add yarn.lock package.json
+        git diff --cached --quiet ||
+          git commit -m "fix(frontend_package): auto-upgrade yarn dependencies"
+      else
+        echo "--- Skipping root yarn.lock (no CVEs) ---"
+      fi
+
+      # Journey
+    - |
+      if [ "$FIX_JOURNEY" = "true" ]; then
+        echo "=== Upgrading journey/yarn.lock ==="
+        (
+          cd journey
+          yarn install --ignore-scripts
+          yarn upgrade --ignore-scripts
+        )
+        git add journey/yarn.lock journey/package.json
+        git diff --cached --quiet ||
+          git commit -m "fix(journey): auto-upgrade yarn dependencies"
+      else
+        echo "--- Skipping journey/yarn.lock (no CVEs) ---"
+      fi  
 
       echo "Running frontend auto-fix..."
 
