@@ -45,13 +45,24 @@
 #   create:merge-request    open an MR from the fix branch to default branch
 #
 # Required CI/CD variables (Settings → CI/CD → Variables in each project):
-#   DEPENDENCY_GOBLIN_TOKEN   PAT with api + write_repository scopes [masked]
+#   DEPENDENCY_GOBLIN_TOKEN             PAT with api + write_repository scopes [masked]
+#   DEPENDENCY_GOBLIN_NAME              Commit author/committer display name
+#   DEPENDENCY_GOBLIN_EMAIL             Commit author/committer email
+#   DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY   ASCII-armored private key, File-type variable
+#                                        (passed straight to `gpg --import` as a path,
+#                                        matching deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY)
+#   DEPENDENCY_GOBLIN_GPG_FINGERPRINT   Full fingerprint of the above key [masked]
 # =============================================================================
 
 variables:
   # Re-declare so the token is available in all jobs without referencing
   # the secret name directly in every script block.
   DEPENDENCY_GOBLIN_TOKEN: "$DEPENDENCY_GOBLIN_TOKEN"
+  DEPENDENCY_GOBLIN_EMAIL: "$DEPENDENCY_GOBLIN_EMAIL"
+  DEPENDENCY_GOBLIN_GPG_FINGERPRINT: "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+  DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY: "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
+  DEPENDENCY_GOBLIN_NAME: "$DEPENDENCY_GOBLIN_NAME"
+  DEPENDENCY_GOBLIN_USERNAME: "$DEPENDENCY_GOBLIN_USERNAME"
 
 # =============================================================================
 # Shared rules template
@@ -149,6 +160,70 @@ variables:
     - mkdir -p .gradle
     - export GRADLE_USER_HOME=`pwd`/.gradle
     - sed -i 's#https\://services.gradle.org/distributions/#http://app-cicd-static-files.srcerer:8080/#g' gradle/wrapper/gradle-wrapper.properties
+
+# =============================================================================
+# Commit-signing fragment
+#
+# The new GitLab instance requires signed commits, so every job that commits
+# on Dependency Goblin's behalf needs this run before it commits. It's kept
+# as its own hidden template — NOT folded into .node / .gradle-dep, and NOT
+# added as a second entry in a job's extends: list — because extends:
+# replaces before_script wholesale rather than merging it. A job that
+# extends both .node (CA-cert setup) and this fragment would keep only
+# whichever came last in extends:, silently losing the other.
+#
+# Instead, jobs that need both splice them together explicitly with
+# !reference, e.g.:
+#
+#   before_script:
+#     - !reference [.node, before_script]
+#     - !reference [.configure-commit-signing, before_script]
+#
+# This mirrors deploy.sh's configureGpgSigning(): import the key into a
+# scratch keyring, verify the imported fingerprint actually matches the
+# configured one (so a stale/wrong key fails loudly instead of silently
+# signing with something unexpected), then configure git to sign with it.
+# GNUPGHOME is a fresh mktemp -d rather than the default ~/.gnupg since
+# these chainguard-based images may not have a writable/prepared $HOME,
+# and each job already runs in its own throwaway container regardless.
+# =============================================================================
+
+.configure-commit-signing:
+  before_script:
+    - |
+      hash gpg || { echo "ERROR: GnuPG must be available on this runner image to sign commits"; exit 1; }
+
+      export GNUPGHOME="$(mktemp -d)"
+      chmod 700 "$GNUPGHOME"
+
+      gpg --batch --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" >/dev/null 2>&1 || {
+        echo "ERROR: failed to import the Dependency Goblin GPG private key"
+        exit 1
+      }
+
+      IMPORTED_FINGERPRINT="$(
+        gpg --batch --with-colons --fingerprint "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" 2>/dev/null |
+          awk -F: '$1 == "fpr" { print $10; exit }'
+      )"
+
+      if [ -z "$IMPORTED_FINGERPRINT" ]; then
+        echo "ERROR: configured GPG fingerprint was not found after import"
+        exit 1
+      fi
+
+      if [ "$IMPORTED_FINGERPRINT" != "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" ]; then
+        echo "ERROR: imported GPG fingerprint does not match DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+        exit 1
+      fi
+
+      git config --global user.name "$DEPENDENCY_GOBLIN_NAME"
+      git config --global user.email "$DEPENDENCY_GOBLIN_EMAIL"
+      git config --global user.signingkey "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+      git config --global gpg.format openpgp
+      git config --global gpg.program "$(command -v gpg)"
+      git config --global commit.gpgsign true
+
+      echo "Configured OpenPGP commit signing with fingerprint $DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
 
 # =============================================================================
 # STAGE: check
@@ -529,12 +604,15 @@ check:vulnerabilities:
 
 fix-frontend:
   stage: fix-frontend
-  # Inherits rules from .dep_pipe_rules and image/cache/CA setup from .node.
-  # GitLab merges parent keys with the job's own keys; the job's keys win
-  # on any conflict.
+  # .node's before_script (CA-cert setup) and .configure-commit-signing's
+  # before_script are combined explicitly below — see the comment on
+  # .configure-commit-signing for why extends: can't do this on its own.
   extends:
     - .dep_pipe_rules
     - .node
+  before_script:
+    - !reference [.node, before_script]
+    - !reference [.configure-commit-signing, before_script]
   needs:
     - job: check:vulnerabilities
       artifacts: true
@@ -547,9 +625,8 @@ fix-frontend:
         exit 0
       fi
 
-    # Configure Git before creating any commits.
-    - git config user.email "sdu4-2@swf.army.mil"
-    - git config user.name "Dependency_Goblin"
+    # Git identity and commit signing are configured in before_script.
+    # Only the token-based remote auth is specific to this job.
     - git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
 
     # Create or reuse the remediation branch.
@@ -578,7 +655,8 @@ fix-frontend:
         git add frontend/yarn.lock frontend/package.json
 
         if ! git diff --cached --quiet; then
-          git commit -m "fix(frontend): auto-upgrade yarn dependencies"
+          git commit -S -m "fix(frontend): auto-upgrade yarn dependencies"
+          git verify-commit HEAD || { echo "ERROR: fix(frontend) commit is not validly signed"; exit 1; }
         fi
       else
         echo "--- Skipping frontend/yarn.lock (no CVEs) ---"
@@ -595,7 +673,8 @@ fix-frontend:
         git add yarn.lock package.json
 
         if ! git diff --cached --quiet; then
-          git commit -m "fix(frontend-package): auto-upgrade yarn dependencies"
+          git commit -S -m "fix(frontend-package): auto-upgrade yarn dependencies"
+          git verify-commit HEAD || { echo "ERROR: fix(frontend-package) commit is not validly signed"; exit 1; }
         fi
       else
         echo "--- Skipping root yarn.lock (no CVEs) ---"
@@ -615,7 +694,8 @@ fix-frontend:
         git add journey/yarn.lock journey/package.json
 
         if ! git diff --cached --quiet; then
-          git commit -m "fix(journey): auto-upgrade yarn dependencies"
+          git commit -S -m "fix(journey): auto-upgrade yarn dependencies"
+          git verify-commit HEAD || { echo "ERROR: fix(journey) commit is not validly signed"; exit 1; }
         fi
       else
         echo "--- Skipping journey/yarn.lock (no CVEs) ---"
@@ -642,6 +722,8 @@ fix-frontend:
 fix-backend-python:
   stage: fix-backend
   extends: .dep_pipe_rules
+  before_script:
+    - !reference [.configure-commit-signing, before_script]
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
@@ -666,8 +748,6 @@ fix-backend-python:
 
       echo "=== Committing build.gradle changes ==="
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
-      git config --global user.email "sdu4-2@swf.army.mil"
-      git config --global user.name "Dependency_Goblin"
       git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
 
       # If fix-frontend already created this branch, check it out instead
@@ -683,7 +763,10 @@ fix-backend-python:
       fi
 
       git add build.gradle
-      git diff --cached --quiet || git commit -m "fix(backend): auto-patch dependency versions for CVE remediation"
+      if ! git diff --cached --quiet; then
+        git commit -S -m "fix(backend): auto-patch dependency versions for CVE remediation"
+        git verify-commit HEAD || { echo "ERROR: fix(backend) commit is not validly signed"; exit 1; }
+      fi
       git push origin "$FIX_BRANCH"
       echo "FIX_BRANCH=auto-fix-vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
@@ -693,10 +776,16 @@ fix-backend-python:
 
 fix-backend-gradle:
   stage: fix-backend
-  # Inherits rules from .dep_pipe_rules and JVM/Gradle setup from .gradle-dep.
+  # .gradle-dep's before_script (JVM truststore + gradle wrapper mirror) and
+  # .configure-commit-signing's before_script are combined explicitly below —
+  # see the comment on .configure-commit-signing for why extends: can't do
+  # this on its own.
   extends:
     - .dep_pipe_rules
     - .gradle-dep
+  before_script:
+    - !reference [.gradle-dep, before_script]
+    - !reference [.configure-commit-signing, before_script]
   needs:
     - job: fix-backend-python
     - job: check:vulnerabilities
@@ -704,8 +793,6 @@ fix-backend-gradle:
   script:
     - |
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
-      git config --global user.email "sdu4-2@swf.army.mil"
-      git config --global user.name "Dependency_Goblin"
       git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
     - |
       FIX_BRANCH="auto-fix-vuln-remediation-$CI_PIPELINE_ID"
@@ -725,7 +812,10 @@ fix-backend-gradle:
       ./gradlew dependencies --write-locks
 
       git add gradle.lockfile
-      git diff --cached --quiet || git commit -m "fix(backend): regenerate gradle.lockfile after CVE remediation"
+      if ! git diff --cached --quiet; then
+        git commit -S -m "fix(backend): regenerate gradle.lockfile after CVE remediation"
+        git verify-commit HEAD || { echo "ERROR: gradle.lockfile commit is not validly signed"; exit 1; }
+      fi
       git push origin "$FIX_BRANCH"
       echo "FIX_BRANCH=auto-fix-vuln-remediation-$CI_PIPELINE_ID" >> fix_branch.env
   artifacts:
@@ -757,8 +847,8 @@ create:merge-request:
       echo "=== Cleaning up stale auto-fix branches ==="
 
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
-      git config --global user.email "sdu4-2@swf.army.mil"
-      git config --global user.name "Dependency_Goblin"
+      git config --global user.email "$DEPENDENCY_GOBLIN_EMAIL"
+      git config --global user.name "$DEPENDENCY_GOBLIN_NAME"
       git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
       git fetch origin
 
