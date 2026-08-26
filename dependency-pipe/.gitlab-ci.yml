@@ -94,7 +94,7 @@ variables:
 # =============================================================================
 
 .node:
-  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips:20.20-dev
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips-gpg:24-dev
   tags:
     - px-app-build
   cache:
@@ -234,7 +234,7 @@ check:vulnerabilities:
   extends: .dep_pipe_rules
   tags:
     - px-app-build
-  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/cdso-pipeline-image-two:latest
   # Pull the scan report artifact from the most recent dependency-scanning job
   # on main. This job does not run the scan itself — it consumes the report
   # produced by GitLab's built-in dependency scanning job which runs separately
@@ -726,7 +726,7 @@ fix-backend-python:
     - !reference [.configure-commit-signing, before_script]
   tags:
     - px-app-build
-  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/cdso-pipeline-image-two:latest
   needs:
     - job: fix-frontend
       artifacts: true
@@ -832,7 +832,7 @@ create:merge-request:
   extends: .dep_pipe_rules
   tags:
     - px-app-build
-  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/pipeline-image:latest
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/cdso-pipeline-image-two:latest
   # Needs all three fix jobs so FIX_BRANCH and all FIX_* flags are available.
   # fix-frontend and fix-backend-python both write FIX_BRANCH to fix_branch.env;
   # whichever ran last wins, but the value is identical so order doesn't matter.
