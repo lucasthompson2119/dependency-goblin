@@ -95,7 +95,7 @@ variables:
 # default.
 # =============================================================================
 
-.node:
+.node-dep:
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips-gpg:24.19.0-dev
   tags:
     - px-app-build
@@ -168,17 +168,17 @@ variables:
 #
 # The new GitLab instance requires signed commits, so every job that commits
 # on Dependency Goblin's behalf needs this run before it commits. It's kept
-# as its own hidden template — NOT folded into .node / .gradle-dep, and NOT
+# as its own hidden template — NOT folded into .node-dep / .gradle-dep, and NOT
 # added as a second entry in a job's extends: list — because extends:
 # replaces before_script wholesale rather than merging it. A job that
-# extends both .node (CA-cert setup) and this fragment would keep only
+# extends both .node-dep (CA-cert setup) and this fragment would keep only
 # whichever came last in extends:, silently losing the other.
 #
 # Instead, jobs that need both splice them together explicitly with
 # !reference, e.g.:
 #
 #   before_script:
-#     - !reference [.node, before_script]
+#     - !reference [.node-dep, before_script]
 #     - !reference [.configure-commit-signing, before_script]
 #
 # This mirrors deploy.sh's configureGpgSigning(): import the key into a
@@ -645,14 +645,14 @@ check:vulnerabilities:
 
 fix-frontend:
   stage: fix-frontend
-  # .node's before_script (CA-cert setup) and .configure-commit-signing's
+  # .node-dep's before_script (CA-cert setup) and .configure-commit-signing's
   # before_script are combined explicitly below — see the comment on
   # .configure-commit-signing for why extends: can't do this on its own.
   extends:
     - .dep_pipe_rules
-    - .node
+    - .node-dep
   before_script:
-    - !reference [.node, before_script]
+    - !reference [.node-dep, before_script]
     - !reference [.configure-commit-signing, before_script]
   needs:
     - job: check:vulnerabilities
