@@ -94,7 +94,7 @@ variables:
 # =============================================================================
 
 .node:
-  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips-gpg:24-dev
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips-gpg:24.19.0-dev
   tags:
     - px-app-build
   cache:
