@@ -289,13 +289,27 @@ variables:
         exit 1
       fi
 
-      # This pipeline's exit status is awk's, not gpg's — awk still exits
-      # 0 on no match, so unlike the imports above this one is already
-      # set -e-safe as a bare assignment.
-      IMPORTED_FINGERPRINT="$(
-        gpg --batch --with-colons --fingerprint "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" 2>/dev/null |
-          awk -F: '$1 == "fpr" { print $10; exit }'
-      )"
+      # Same set -e concern as the import above: if this shell has
+      # pipefail active, a pipe's exit status can come from ANY command
+      # in it, not just the last one — so `gpg | awk` could still trip
+      # errexit on gpg's failure even though awk itself always exits 0.
+      # Capture gpg's output through its own guarded if/else first, then
+      # parse the already-captured plain string with awk separately —
+      # that second step can't trip errexit since there's no longer a
+      # live gpg process in the pipe to fail.
+      if GPG_FPR_OUTPUT="$(gpg --batch --with-colons --fingerprint "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" 2>&1)"; then
+        GPG_FPR_STATUS=0
+      else
+        GPG_FPR_STATUS=$?
+      fi
+
+      if [ "$GPG_FPR_STATUS" -ne 0 ]; then
+        echo "$GPG_FPR_OUTPUT"
+        echo "ERROR: could not look up the imported key by fingerprint (gpg exit status $GPG_FPR_STATUS)"
+        exit 1
+      fi
+
+      IMPORTED_FINGERPRINT="$(printf '%s\n' "$GPG_FPR_OUTPUT" | awk -F: '$1 == "fpr" { print $10; exit }')"
 
       if [ -z "$IMPORTED_FINGERPRINT" ]; then
         echo "ERROR: configured GPG fingerprint was not found after import"
