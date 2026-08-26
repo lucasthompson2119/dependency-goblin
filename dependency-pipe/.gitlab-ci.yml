@@ -45,7 +45,6 @@
 #   create:merge-request    open an MR from the fix branch to default branch
 #
 # Required CI/CD variables (Settings → CI/CD → Variables in each project):
-#   DEPENDENCY_GOBLIN_TOKEN             PAT with api + write_repository scopes [masked]
 #   DEPENDENCY_GOBLIN_NAME              Commit author/committer display name
 #   DEPENDENCY_GOBLIN_EMAIL             Commit author/committer email
 #   DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY   ASCII-armored private key, File-type variable
@@ -53,6 +52,24 @@
 #                                        matching deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY)
 #   DEPENDENCY_GOBLIN_GPG_FINGERPRINT   Full fingerprint of the above key [masked]
 #   DEPENDENCY_GOBLIN_GPG_PASSPHRASE    Passphrase for the above key [masked]
+#
+# All git push/fetch and GitLab API calls (branch push, MR creation, stale
+# branch cleanup) authenticate with GitLab's built-in $CI_JOB_TOKEN rather
+# than a personal access token, since every one of those operations targets
+# $CI_PROJECT_PATH — the same project the pipeline is already running in.
+# $CI_JOB_TOKEN is generated automatically per pipeline run with no
+# membership to manage, so this file works in any consuming project with
+# no per-project setup beyond the CI/CD variables above. This file
+# previously used a DEPENDENCY_GOBLIN_TOKEN PAT tied to a dedicated
+# service account instead, which required that account to be added as a
+# member of every consuming project individually — DEPENDENCY_GOBLIN_TOKEN
+# is no longer used anywhere in this file and can be retired if nothing
+# else depends on it. Commit authorship ("Dependency Goblin") and GPG
+# signing are unaffected by this — both are independent of which
+# credential authenticates the push/API call. If a consuming project has
+# CI/CD job token push or API access restricted (Settings → CI/CD →
+# Token Access), that's a project-level Maintainer/Owner setting to
+# enable, not something requiring group-level admin rights.
 #
 # None of the above needs (or should get) re-declared in a top-level
 # variables: block. Project/group CI/CD variables are already injected
@@ -63,9 +80,8 @@
 # un-expanded string "$NAME" instead of the real value (hit for both
 # DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY, a File-type variable, and
 # DEPENDENCY_GOBLIN_GPG_FINGERPRINT, a plain masked Variable — so this
-# isn't specific to either type, and DEPENDENCY_GOBLIN_TOKEN using the
-# same pattern was never actually verified safe, just never caught
-# failing). Every job below references these variable names directly
+# isn't specific to either type). Every job below references these
+# variable names directly
 # instead.
 # =============================================================================
 
@@ -277,7 +293,9 @@
           GPG_IMPORT_STATUS=$?
         fi
       fi
-      echo "$GPG_IMPORT_OUTPUT"
+      if [ "$GPG_IMPORT_STATUS" -eq 0 ]; then
+        echo "Private key import: OK"
+      fi
 
       if [ "$GPG_IMPORT_STATUS" -ne 0 ]; then
         echo "ERROR: failed to import the Dependency Goblin GPG private key (gpg exit status $GPG_IMPORT_STATUS)"
@@ -286,11 +304,11 @@
 
       # Rather than looking the key up BY the configured fingerprint
       # (gpg --fingerprint <arg>, which fails hard with a bare "No public
-      # key" if it doesn't match anything — no indication of what's
-      # actually in the keyring), list every fingerprint gpg actually
-      # imported and compare against what's configured. Fingerprints
-      # aren't secret (they're the public identifier for the keypair),
-      # so both are safe to print directly for a side-by-side diff.
+      # key" if it doesn't match anything), list every fingerprint gpg
+      # actually imported and compare against what's configured — without
+      # printing either value, since fingerprints and gpg's own listing
+      # output (which includes the key's UID/email) are kept out of the
+      # log here.
       if GPG_LIST_OUTPUT="$(gpg --batch --with-colons --list-secret-keys 2>&1)"; then
         GPG_LIST_STATUS=0
       else
@@ -298,16 +316,21 @@
       fi
 
       if [ "$GPG_LIST_STATUS" -ne 0 ]; then
-        echo "$GPG_LIST_OUTPUT"
         echo "ERROR: could not list imported secret keys (gpg exit status $GPG_LIST_STATUS)"
         exit 1
       fi
 
       IMPORTED_FINGERPRINTS="$(printf '%s\n' "$GPG_LIST_OUTPUT" | awk -F: '$1 == "fpr" { print $10 }')"
 
-      echo "Fingerprint(s) found in imported keyring:"
-      echo "$IMPORTED_FINGERPRINTS"
-      echo "Configured DEPENDENCY_GOBLIN_GPG_FINGERPRINT: $DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+      # A loop, not `grep -c .` — grep -c exits 1 on zero matches even
+      # though it still prints 0, which would be another silent set -e
+      # trap on a bare assignment (same class of bug fixed elsewhere in
+      # this fragment already).
+      IMPORTED_FINGERPRINT_COUNT=0
+      for fp in $IMPORTED_FINGERPRINTS; do
+        IMPORTED_FINGERPRINT_COUNT=$((IMPORTED_FINGERPRINT_COUNT + 1))
+      done
+      echo "Fingerprint(s) found in imported keyring: $IMPORTED_FINGERPRINT_COUNT"
 
       if [ -z "$IMPORTED_FINGERPRINTS" ]; then
         echo "ERROR: no fingerprints found after import — the key may not have imported correctly"
@@ -322,7 +345,7 @@
       done
 
       if [ "$FINGERPRINT_MATCHED" -ne 1 ]; then
-        echo "ERROR: DEPENDENCY_GOBLIN_GPG_FINGERPRINT does not match any fingerprint in the imported key — update the CI/CD variable to one of the fingerprint(s) printed above"
+        echo "ERROR: DEPENDENCY_GOBLIN_GPG_FINGERPRINT does not match any fingerprint in the imported key — verify the CI/CD variable against the key's actual fingerprint (e.g. gpg --fingerprint against the exported key material directly, outside CI)"
         exit 1
       fi
 
@@ -343,7 +366,6 @@
       fi
 
       if [ "$GPG_PRIME_STATUS" -ne 0 ]; then
-        echo "$GPG_PRIME_OUTPUT"
         echo "ERROR: could not unlock the Dependency Goblin GPG key non-interactively (gpg exit status $GPG_PRIME_STATUS) — check DEPENDENCY_GOBLIN_GPG_PASSPHRASE"
         exit 1
       fi
@@ -355,7 +377,7 @@
       git config --global gpg.program "$(command -v gpg)"
       git config --global commit.gpgsign true
 
-      echo "Configured OpenPGP commit signing with fingerprint $DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+      echo "Configured OpenPGP commit signing"
 
 # =============================================================================
 # Git TLS trust fragment
@@ -786,7 +808,7 @@ fix-frontend:
 
     # Git identity and commit signing are configured in before_script.
     # Only the token-based remote auth is specific to this job.
-    - git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+    - git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
 
     # Create or reuse the remediation branch.
     - |
@@ -908,7 +930,7 @@ fix-backend-python:
 
       echo "=== Committing build.gradle changes ==="
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
-      git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
 
       # If fix-frontend already created this branch, check it out instead
       # of trying to create it again.
@@ -954,7 +976,7 @@ fix-backend-gradle:
   script:
     - |
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
-      git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
     - |
       FIX_BRANCH="auto-fix-vuln-remediation-$CI_PIPELINE_ID"
       git fetch origin
@@ -1012,7 +1034,7 @@ create:merge-request:
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
       git config --global user.email "$DEPENDENCY_GOBLIN_EMAIL"
       git config --global user.name "$DEPENDENCY_GOBLIN_NAME"
-      git remote set-url origin "https://oauth2:$DEPENDENCY_GOBLIN_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
       git fetch origin
 
       # Fetch all remote branches matching the prefix using git ls-remote,
@@ -1112,7 +1134,7 @@ create:merge-request:
       if RESPONSE="$(curl --show-error \
         --cacert /etc/ssl/custom/dod-ca-bundle.pem \
         --request POST \
-        --header "PRIVATE-TOKEN: ${DEPENDENCY_GOBLIN_TOKEN}" \
+        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
         --data "source_branch=${FIX_BRANCH}" \
         --data "target_branch=${CI_DEFAULT_BRANCH}" \
         --data "title=${MR_TITLE}" \
