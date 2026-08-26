@@ -221,6 +221,27 @@ variables:
       # condition is one of the standard exemptions from errexit, so we
       # capture gpg's real exit status and output instead of losing them.
       if [ -f "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" ]; then
+        # Structural sanity check only — this never prints the key body,
+        # just its size and whether the armor header/footer lines are
+        # exactly what gpg expects. Those two lines are the public armor
+        # delimiters, not secret material, so they're safe to print.
+        echo "Private key file: $(wc -c < "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY") bytes, $(wc -l < "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY") lines"
+        KEY_FIRST_LINE="$(head -n1 "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY")"
+        KEY_LAST_LINE="$(tail -n1 "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY")"
+        if [ "$KEY_FIRST_LINE" = "-----BEGIN PGP PRIVATE KEY BLOCK-----" ]; then
+          echo "Armor header: OK"
+        else
+          echo "Armor header: MISMATCH (expected '-----BEGIN PGP PRIVATE KEY BLOCK-----')"
+        fi
+        if [ "$KEY_LAST_LINE" = "-----END PGP PRIVATE KEY BLOCK-----" ]; then
+          echo "Armor footer: OK"
+        else
+          echo "Armor footer: MISMATCH (expected '-----END PGP PRIVATE KEY BLOCK-----')"
+        fi
+        if grep -q "$(printf '\r')" "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" 2>/dev/null; then
+          echo "WARNING: file contains CRLF (Windows-style) line endings"
+        fi
+
         if GPG_IMPORT_OUTPUT="$(gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" 2>&1)"; then
           GPG_IMPORT_STATUS=0
         else
