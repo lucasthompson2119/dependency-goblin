@@ -53,26 +53,21 @@
 #                                        matching deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY)
 #   DEPENDENCY_GOBLIN_GPG_FINGERPRINT   Full fingerprint of the above key [masked]
 #   DEPENDENCY_GOBLIN_GPG_PASSPHRASE    Passphrase for the above key [masked]
+#
+# None of the above needs (or should get) re-declared in a top-level
+# variables: block. Project/group CI/CD variables are already injected
+# into every job's environment automatically — no redeclaration required
+# to "make them available". An earlier version of this file did redeclare
+# several of them as "NAME: $NAME" for convenience, which turned out to
+# intermittently break: GitLab would sometimes pass through the literal,
+# un-expanded string "$NAME" instead of the real value (hit for both
+# DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY, a File-type variable, and
+# DEPENDENCY_GOBLIN_GPG_FINGERPRINT, a plain masked Variable — so this
+# isn't specific to either type, and DEPENDENCY_GOBLIN_TOKEN using the
+# same pattern was never actually verified safe, just never caught
+# failing). Every job below references these variable names directly
+# instead.
 # =============================================================================
-
-variables:
-  # Re-declare so these are available in all jobs without referencing the
-  # secret name directly in every script block. DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY
-  # is deliberately NOT re-declared here — it's a File-type CI/CD variable,
-  # and self-referencing a File-type variable this way ("NAME: $NAME")
-  # doesn't expand to the file's path the way it does for a normal masked
-  # variable like DEPENDENCY_GOBLIN_TOKEN. GitLab silently passes through
-  # the literal, un-expanded string "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
-  # instead, which is exactly what broke import for a while — the value
-  # gpg was choking on was that 34-character literal string, not the key.
-  # .configure-commit-signing references DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY
-  # directly (unshadowed), which resolves correctly.
-  DEPENDENCY_GOBLIN_TOKEN: "$DEPENDENCY_GOBLIN_TOKEN"
-  DEPENDENCY_GOBLIN_EMAIL: "$DEPENDENCY_GOBLIN_EMAIL"
-  DEPENDENCY_GOBLIN_GPG_FINGERPRINT: "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
-  DEPENDENCY_GOBLIN_GPG_PASSPHRASE: "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE"
-  DEPENDENCY_GOBLIN_NAME: "$DEPENDENCY_GOBLIN_NAME"
-  DEPENDENCY_GOBLIN_USERNAME: "$DEPENDENCY_GOBLIN_USERNAME"
 
 # =============================================================================
 # Shared rules template
