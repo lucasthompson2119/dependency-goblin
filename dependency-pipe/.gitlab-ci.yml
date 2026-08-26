@@ -213,19 +213,36 @@ variables:
       # like deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY) or a plain
       # "Variable" type holding the armored key text directly. Handle both
       # so a CI/CD variable-type mismatch doesn't silently break signing.
+      #
+      # GitLab Runner's generated job scripts run with set -e, and a bare
+      # VAR="$(cmd)" assignment DOES trip errexit if cmd fails — the
+      # script would die right here, before any of our own diagnostics
+      # below get a chance to print. Wrapping the assignment as an if
+      # condition is one of the standard exemptions from errexit, so we
+      # capture gpg's real exit status and output instead of losing them.
       if [ -f "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" ]; then
-        GPG_IMPORT_OUTPUT="$(gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" 2>&1)"
+        if GPG_IMPORT_OUTPUT="$(gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" 2>&1)"; then
+          GPG_IMPORT_STATUS=0
+        else
+          GPG_IMPORT_STATUS=$?
+        fi
       else
-        GPG_IMPORT_OUTPUT="$(printf '%s\n' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import 2>&1)"
+        if GPG_IMPORT_OUTPUT="$(printf '%s\n' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import 2>&1)"; then
+          GPG_IMPORT_STATUS=0
+        else
+          GPG_IMPORT_STATUS=$?
+        fi
       fi
-      GPG_IMPORT_STATUS=$?
       echo "$GPG_IMPORT_OUTPUT"
 
       if [ "$GPG_IMPORT_STATUS" -ne 0 ]; then
-        echo "ERROR: failed to import the Dependency Goblin GPG private key"
+        echo "ERROR: failed to import the Dependency Goblin GPG private key (gpg exit status $GPG_IMPORT_STATUS)"
         exit 1
       fi
 
+      # This pipeline's exit status is awk's, not gpg's — awk still exits
+      # 0 on no match, so unlike the imports above this one is already
+      # set -e-safe as a bare assignment.
       IMPORTED_FINGERPRINT="$(
         gpg --batch --with-colons --fingerprint "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" 2>/dev/null |
           awk -F: '$1 == "fpr" { print $10; exit }'
@@ -247,13 +264,19 @@ variables:
       # won't supply one. Priming here — one explicit loopback unlock —
       # populates gpg-agent's cache for this key, so git's later call
       # gets served from cache instead of needing a passphrase itself.
-      GPG_PRIME_OUTPUT="$(
+      # Same set -e concern as the import above, same if/else fix.
+      if GPG_PRIME_OUTPUT="$(
         echo "test" | gpg --batch --yes --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" \
           -u "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" --clearsign 2>&1 >/dev/null
-      )"
-      if [ $? -ne 0 ]; then
+      )"; then
+        GPG_PRIME_STATUS=0
+      else
+        GPG_PRIME_STATUS=$?
+      fi
+
+      if [ "$GPG_PRIME_STATUS" -ne 0 ]; then
         echo "$GPG_PRIME_OUTPUT"
-        echo "ERROR: could not unlock the Dependency Goblin GPG key non-interactively — check DEPENDENCY_GOBLIN_GPG_PASSPHRASE"
+        echo "ERROR: could not unlock the Dependency Goblin GPG key non-interactively (gpg exit status $GPG_PRIME_STATUS) — check DEPENDENCY_GOBLIN_GPG_PASSPHRASE"
         exit 1
       fi
 
