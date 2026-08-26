@@ -197,6 +197,9 @@ variables:
       chmod 700 "$GNUPGHOME"
 
       echo "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
+      gpg --version
+      which gpg-agent
+      which pinentry pinentry-curses pinentry-tty
 
       gpg --batch --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" >/dev/null 2>&1 || {
         echo "ERROR: failed to import the Dependency Goblin GPG private key"
