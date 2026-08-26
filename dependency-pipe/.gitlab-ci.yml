@@ -52,6 +52,7 @@
 #                                        (passed straight to `gpg --import` as a path,
 #                                        matching deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY)
 #   DEPENDENCY_GOBLIN_GPG_FINGERPRINT   Full fingerprint of the above key [masked]
+#   DEPENDENCY_GOBLIN_GPG_PASSPHRASE    Passphrase for the above key [masked]
 # =============================================================================
 
 variables:
@@ -61,6 +62,7 @@ variables:
   DEPENDENCY_GOBLIN_EMAIL: "$DEPENDENCY_GOBLIN_EMAIL"
   DEPENDENCY_GOBLIN_GPG_FINGERPRINT: "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
   DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY: "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
+  DEPENDENCY_GOBLIN_GPG_PASSPHRASE: "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE"
   DEPENDENCY_GOBLIN_NAME: "$DEPENDENCY_GOBLIN_NAME"
   DEPENDENCY_GOBLIN_USERNAME: "$DEPENDENCY_GOBLIN_USERNAME"
 
@@ -93,7 +95,7 @@ variables:
 # default.
 # =============================================================================
 
-.node-dep:
+.node:
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/node-fips-gpg:24.19.0-dev
   tags:
     - px-app-build
@@ -166,17 +168,17 @@ variables:
 #
 # The new GitLab instance requires signed commits, so every job that commits
 # on Dependency Goblin's behalf needs this run before it commits. It's kept
-# as its own hidden template — NOT folded into .node-dep / .gradle-dep, and NOT
+# as its own hidden template — NOT folded into .node / .gradle-dep, and NOT
 # added as a second entry in a job's extends: list — because extends:
 # replaces before_script wholesale rather than merging it. A job that
-# extends both .node-dep (CA-cert setup) and this fragment would keep only
+# extends both .node (CA-cert setup) and this fragment would keep only
 # whichever came last in extends:, silently losing the other.
 #
 # Instead, jobs that need both splice them together explicitly with
 # !reference, e.g.:
 #
 #   before_script:
-#     - !reference [.node-dep, before_script]
+#     - !reference [.node, before_script]
 #     - !reference [.configure-commit-signing, before_script]
 #
 # This mirrors deploy.sh's configureGpgSigning(): import the key into a
@@ -196,17 +198,33 @@ variables:
       export GNUPGHOME="$(mktemp -d)"
       chmod 700 "$GNUPGHOME"
 
-      gpg --version
-      echo "---"
-      which gpg-agent || echo "gpg-agent: NOT FOUND"
-      which pinentry pinentry-curses pinentry-tty 2>/dev/null || echo "pinentry: NOT FOUND"
-      echo "---"
-      gpgconf --list-dirs 2>&1 || echo "gpgconf: FAILED"
+      # This image has gpg-agent but no pinentry-* binary, and gpg-agent
+      # needs *some* pinentry to ask for a passphrase whenever it touches
+      # secret key material (import, sign, etc.). Loopback mode tells the
+      # agent to take the passphrase directly from the calling process
+      # instead of prompting an interactive pinentry, so no pinentry
+      # package is needed at all.
+      echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+      echo "pinentry-mode loopback" > "$GNUPGHOME/gpg.conf"
+      gpgconf --reload gpg-agent 2>/dev/null || true
 
-      gpg --batch --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" >/dev/null 2>&1 || {
+      # DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY may be configured as either a
+      # GitLab "File" type variable (value is a path to the key on disk,
+      # like deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY) or a plain
+      # "Variable" type holding the armored key text directly. Handle both
+      # so a CI/CD variable-type mismatch doesn't silently break signing.
+      if [ -f "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" ]; then
+        GPG_IMPORT_OUTPUT="$(gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" 2>&1)"
+      else
+        GPG_IMPORT_OUTPUT="$(printf '%s\n' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import 2>&1)"
+      fi
+      GPG_IMPORT_STATUS=$?
+      echo "$GPG_IMPORT_OUTPUT"
+
+      if [ "$GPG_IMPORT_STATUS" -ne 0 ]; then
         echo "ERROR: failed to import the Dependency Goblin GPG private key"
         exit 1
-      }
+      fi
 
       IMPORTED_FINGERPRINT="$(
         gpg --batch --with-colons --fingerprint "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" 2>/dev/null |
@@ -220,6 +238,22 @@ variables:
 
       if [ "$IMPORTED_FINGERPRINT" != "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" ]; then
         echo "ERROR: imported GPG fingerprint does not match DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+        exit 1
+      fi
+
+      # git commit -S invokes gpg internally without a --passphrase flag.
+      # gpg.conf's pinentry-mode loopback covers that call, but loopback
+      # mode still needs a passphrase source on a cache miss, and git
+      # won't supply one. Priming here — one explicit loopback unlock —
+      # populates gpg-agent's cache for this key, so git's later call
+      # gets served from cache instead of needing a passphrase itself.
+      GPG_PRIME_OUTPUT="$(
+        echo "test" | gpg --batch --yes --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" \
+          -u "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" --clearsign 2>&1 >/dev/null
+      )"
+      if [ $? -ne 0 ]; then
+        echo "$GPG_PRIME_OUTPUT"
+        echo "ERROR: could not unlock the Dependency Goblin GPG key non-interactively — check DEPENDENCY_GOBLIN_GPG_PASSPHRASE"
         exit 1
       fi
 
@@ -611,14 +645,14 @@ check:vulnerabilities:
 
 fix-frontend:
   stage: fix-frontend
-  # .node-dep's before_script (CA-cert setup) and .configure-commit-signing's
+  # .node's before_script (CA-cert setup) and .configure-commit-signing's
   # before_script are combined explicitly below — see the comment on
   # .configure-commit-signing for why extends: can't do this on its own.
   extends:
     - .dep_pipe_rules
-    - .node-dep
+    - .node
   before_script:
-    - !reference [.node-dep, before_script]
+    - !reference [.node, before_script]
     - !reference [.configure-commit-signing, before_script]
   needs:
     - job: check:vulnerabilities
