@@ -56,12 +56,20 @@
 # =============================================================================
 
 variables:
-  # Re-declare so the token is available in all jobs without referencing
-  # the secret name directly in every script block.
+  # Re-declare so these are available in all jobs without referencing the
+  # secret name directly in every script block. DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY
+  # is deliberately NOT re-declared here — it's a File-type CI/CD variable,
+  # and self-referencing a File-type variable this way ("NAME: $NAME")
+  # doesn't expand to the file's path the way it does for a normal masked
+  # variable like DEPENDENCY_GOBLIN_TOKEN. GitLab silently passes through
+  # the literal, un-expanded string "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
+  # instead, which is exactly what broke import for a while — the value
+  # gpg was choking on was that 34-character literal string, not the key.
+  # .configure-commit-signing references DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY
+  # directly (unshadowed), which resolves correctly.
   DEPENDENCY_GOBLIN_TOKEN: "$DEPENDENCY_GOBLIN_TOKEN"
   DEPENDENCY_GOBLIN_EMAIL: "$DEPENDENCY_GOBLIN_EMAIL"
   DEPENDENCY_GOBLIN_GPG_FINGERPRINT: "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
-  DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY: "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
   DEPENDENCY_GOBLIN_GPG_PASSPHRASE: "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE"
   DEPENDENCY_GOBLIN_NAME: "$DEPENDENCY_GOBLIN_NAME"
   DEPENDENCY_GOBLIN_USERNAME: "$DEPENDENCY_GOBLIN_USERNAME"
