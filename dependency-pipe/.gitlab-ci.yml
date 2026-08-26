@@ -221,6 +221,7 @@ variables:
       # condition is one of the standard exemptions from errexit, so we
       # capture gpg's real exit status and output instead of losing them.
       if [ -f "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" ]; then
+        echo "DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY resolved as a file path (File-type variable)"
         # Structural sanity check only — this never prints the key body,
         # just its size and whether the armor header/footer lines are
         # exactly what gpg expects. Those two lines are the public armor
@@ -248,6 +249,25 @@ variables:
           GPG_IMPORT_STATUS=$?
         fi
       else
+        echo "DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY did NOT resolve as a file path — treating its value as the literal key text (plain Variable-type)"
+        # Same structural sanity check as the file-path branch above,
+        # applied to the variable's value directly instead of a file.
+        KEY_BYTES="$(printf '%s' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | wc -c)"
+        KEY_LINES="$(printf '%s\n' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | wc -l)"
+        echo "Private key value: $KEY_BYTES bytes, $KEY_LINES lines"
+        KEY_FIRST_LINE="$(printf '%s\n' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | head -n1)"
+        KEY_LAST_LINE="$(printf '%s\n' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | tail -n1)"
+        if [ "$KEY_FIRST_LINE" = "-----BEGIN PGP PRIVATE KEY BLOCK-----" ]; then
+          echo "Armor header: OK"
+        else
+          echo "Armor header: MISMATCH (expected '-----BEGIN PGP PRIVATE KEY BLOCK-----')"
+        fi
+        if [ "$KEY_LAST_LINE" = "-----END PGP PRIVATE KEY BLOCK-----" ]; then
+          echo "Armor footer: OK"
+        else
+          echo "Armor footer: MISMATCH (expected '-----END PGP PRIVATE KEY BLOCK-----')"
+        fi
+
         if GPG_IMPORT_OUTPUT="$(printf '%s\n' "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" | gpg --batch --pinentry-mode loopback --passphrase "$DEPENDENCY_GOBLIN_GPG_PASSPHRASE" --import 2>&1)"; then
           GPG_IMPORT_STATUS=0
         else
