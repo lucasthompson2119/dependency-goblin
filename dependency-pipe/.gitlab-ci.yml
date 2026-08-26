@@ -358,6 +358,31 @@
       echo "Configured OpenPGP commit signing with fingerprint $DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
 
 # =============================================================================
+# Git TLS trust fragment
+#
+# code.cdso.army.mil (and any other internal GitLab host this file talks
+# to via $CI_SERVER_HOST) presents certificates signed by the DoD PKI,
+# which isn't in these minimal chainguard images' default trust store.
+# .node-dep and .gradle-dep already handle this for npm/yarn and the JVM
+# respectively, but neither covers plain git — and every job that runs
+# git fetch/push/ls-remote against $CI_SERVER_HOST needs this fix too,
+# independently of whether that job also signs commits (the initial
+# "Getting source from Git repository" step GitLab Runner itself does
+# before the job script runs isn't affected — this is only about git
+# commands our own scripts invoke inside the job container).
+#
+# Kept as its own fragment rather than folded into
+# .configure-commit-signing, since create:merge-request needs this TLS
+# fix but never signs anything, so the two are composed independently
+# per job via !reference — same reasoning as why .configure-commit-signing
+# is separate from .node-dep/.gradle-dep in the first place.
+# =============================================================================
+
+.configure-git-tls:
+  before_script:
+    - git config --global http.sslCAInfo /etc/ssl/custom/dod-ca-bundle.pem
+
+# =============================================================================
 # STAGE: check
 # =============================================================================
 
@@ -736,15 +761,17 @@ check:vulnerabilities:
 
 fix-frontend:
   stage: fix-frontend
-  # .node-dep's before_script (CA-cert setup) and .configure-commit-signing's
-  # before_script are combined explicitly below — see the comment on
-  # .configure-commit-signing for why extends: can't do this on its own.
+  # .node-dep's before_script (CA-cert setup), .configure-commit-signing's,
+  # and .configure-git-tls's before_scripts are combined explicitly below —
+  # see the comment on .configure-commit-signing for why extends: can't do
+  # this on its own.
   extends:
     - .dep_pipe_rules
     - .node-dep
   before_script:
     - !reference [.node-dep, before_script]
     - !reference [.configure-commit-signing, before_script]
+    - !reference [.configure-git-tls, before_script]
   needs:
     - job: check:vulnerabilities
       artifacts: true
@@ -856,6 +883,7 @@ fix-backend-python:
   extends: .dep_pipe_rules
   before_script:
     - !reference [.configure-commit-signing, before_script]
+    - !reference [.configure-git-tls, before_script]
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/cdso-pipeline-image-two:latest
@@ -908,16 +936,17 @@ fix-backend-python:
 
 fix-backend-gradle:
   stage: fix-backend
-  # .gradle-dep's before_script (JVM truststore + gradle wrapper mirror) and
-  # .configure-commit-signing's before_script are combined explicitly below —
-  # see the comment on .configure-commit-signing for why extends: can't do
-  # this on its own.
+  # .gradle-dep's before_script (JVM truststore + gradle wrapper mirror),
+  # .configure-commit-signing's, and .configure-git-tls's before_scripts
+  # are combined explicitly below — see the comment on
+  # .configure-commit-signing for why extends: can't do this on its own.
   extends:
     - .dep_pipe_rules
     - .gradle-dep
   before_script:
     - !reference [.gradle-dep, before_script]
     - !reference [.configure-commit-signing, before_script]
+    - !reference [.configure-git-tls, before_script]
   needs:
     - job: fix-backend-python
     - job: check:vulnerabilities
@@ -962,6 +991,8 @@ fix-backend-gradle:
 create:merge-request:
   stage: merge-request
   extends: .dep_pipe_rules
+  before_script:
+    - !reference [.configure-git-tls, before_script]
   tags:
     - px-app-build
   image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/cdso-pipeline-image-two:latest
@@ -1067,7 +1098,19 @@ create:merge-request:
       )
 
       echo "Sending MR creation request..."
-      RESPONSE=$(curl --show-error \
+      # Wrapped in if/else, not a bare assignment: curl only returns
+      # non-zero here for transport-level failures (TLS, DNS, connection
+      # refused — no --fail flag, so ordinary HTTP 4xx/5xx still exits 0
+      # and is handled by the response-parsing below). But a transport
+      # failure IS exactly what an untrusted CA produces, and a bare
+      # RESPONSE="$(curl ...)" would die silently under set -e the same
+      # way the gpg calls earlier in this file did before they were
+      # fixed the same way. Only stdout is captured (as before) so a
+      # successful response's JSON body isn't corrupted by --show-error's
+      # own output, which prints directly to the job log via stderr
+      # regardless and needs no separate handling here.
+      if RESPONSE="$(curl --show-error \
+        --cacert /etc/ssl/custom/dod-ca-bundle.pem \
         --request POST \
         --header "PRIVATE-TOKEN: ${DEPENDENCY_GOBLIN_TOKEN}" \
         --data "source_branch=${FIX_BRANCH}" \
@@ -1075,8 +1118,16 @@ create:merge-request:
         --data "title=${MR_TITLE}" \
         --data "description=${MR_DESCRIPTION}" \
         --data "assignee_id=${ASSIGNEE_USER_ID}" \
-        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests"
-      )
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests")"; then
+        CURL_STATUS=0
+      else
+        CURL_STATUS=$?
+      fi
+
+      if [ "$CURL_STATUS" -ne 0 ]; then
+        echo "ERROR: MR creation request failed at the transport level (curl exit status $CURL_STATUS)"
+        exit 1
+      fi
 
       echo "Raw API response:"
       echo "$RESPONSE"
