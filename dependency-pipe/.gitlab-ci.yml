@@ -196,10 +196,12 @@ variables:
       export GNUPGHOME="$(mktemp -d)"
       chmod 700 "$GNUPGHOME"
 
-      echo "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
       gpg --version
-      which gpg-agent
-      which pinentry pinentry-curses pinentry-tty
+      echo "---"
+      which gpg-agent || echo "gpg-agent: NOT FOUND"
+      which pinentry pinentry-curses pinentry-tty 2>/dev/null || echo "pinentry: NOT FOUND"
+      echo "---"
+      gpgconf --list-dirs 2>&1 || echo "gpgconf: FAILED"
 
       gpg --batch --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" >/dev/null 2>&1 || {
         echo "ERROR: failed to import the Dependency Goblin GPG private key"
