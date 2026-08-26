@@ -196,6 +196,8 @@ variables:
       export GNUPGHOME="$(mktemp -d)"
       chmod 700 "$GNUPGHOME"
 
+      echo "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY"
+
       gpg --batch --import "$DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY" >/dev/null 2>&1 || {
         echo "ERROR: failed to import the Dependency Goblin GPG private key"
         exit 1
