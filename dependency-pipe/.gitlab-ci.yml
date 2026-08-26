@@ -289,35 +289,45 @@ variables:
         exit 1
       fi
 
-      # Same set -e concern as the import above: if this shell has
-      # pipefail active, a pipe's exit status can come from ANY command
-      # in it, not just the last one — so `gpg | awk` could still trip
-      # errexit on gpg's failure even though awk itself always exits 0.
-      # Capture gpg's output through its own guarded if/else first, then
-      # parse the already-captured plain string with awk separately —
-      # that second step can't trip errexit since there's no longer a
-      # live gpg process in the pipe to fail.
-      if GPG_FPR_OUTPUT="$(gpg --batch --with-colons --fingerprint "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" 2>&1)"; then
-        GPG_FPR_STATUS=0
+      # Rather than looking the key up BY the configured fingerprint
+      # (gpg --fingerprint <arg>, which fails hard with a bare "No public
+      # key" if it doesn't match anything — no indication of what's
+      # actually in the keyring), list every fingerprint gpg actually
+      # imported and compare against what's configured. Fingerprints
+      # aren't secret (they're the public identifier for the keypair),
+      # so both are safe to print directly for a side-by-side diff.
+      if GPG_LIST_OUTPUT="$(gpg --batch --with-colons --list-secret-keys 2>&1)"; then
+        GPG_LIST_STATUS=0
       else
-        GPG_FPR_STATUS=$?
+        GPG_LIST_STATUS=$?
       fi
 
-      if [ "$GPG_FPR_STATUS" -ne 0 ]; then
-        echo "$GPG_FPR_OUTPUT"
-        echo "ERROR: could not look up the imported key by fingerprint (gpg exit status $GPG_FPR_STATUS)"
+      if [ "$GPG_LIST_STATUS" -ne 0 ]; then
+        echo "$GPG_LIST_OUTPUT"
+        echo "ERROR: could not list imported secret keys (gpg exit status $GPG_LIST_STATUS)"
         exit 1
       fi
 
-      IMPORTED_FINGERPRINT="$(printf '%s\n' "$GPG_FPR_OUTPUT" | awk -F: '$1 == "fpr" { print $10; exit }')"
+      IMPORTED_FINGERPRINTS="$(printf '%s\n' "$GPG_LIST_OUTPUT" | awk -F: '$1 == "fpr" { print $10 }')"
 
-      if [ -z "$IMPORTED_FINGERPRINT" ]; then
-        echo "ERROR: configured GPG fingerprint was not found after import"
+      echo "Fingerprint(s) found in imported keyring:"
+      echo "$IMPORTED_FINGERPRINTS"
+      echo "Configured DEPENDENCY_GOBLIN_GPG_FINGERPRINT: $DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+
+      if [ -z "$IMPORTED_FINGERPRINTS" ]; then
+        echo "ERROR: no fingerprints found after import — the key may not have imported correctly"
         exit 1
       fi
 
-      if [ "$IMPORTED_FINGERPRINT" != "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" ]; then
-        echo "ERROR: imported GPG fingerprint does not match DEPENDENCY_GOBLIN_GPG_FINGERPRINT"
+      FINGERPRINT_MATCHED=0
+      for fp in $IMPORTED_FINGERPRINTS; do
+        if [ "$fp" = "$DEPENDENCY_GOBLIN_GPG_FINGERPRINT" ]; then
+          FINGERPRINT_MATCHED=1
+        fi
+      done
+
+      if [ "$FINGERPRINT_MATCHED" -ne 1 ]; then
+        echo "ERROR: DEPENDENCY_GOBLIN_GPG_FINGERPRINT does not match any fingerprint in the imported key — update the CI/CD variable to one of the fingerprint(s) printed above"
         exit 1
       fi
 
