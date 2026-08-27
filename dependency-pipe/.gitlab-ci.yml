@@ -44,9 +44,9 @@
 #                           commit to fix branch
 #   create:merge-request    open an MR from the fix branch to default branch
 #
-# Required CI/CD variables (Settings → CI/CD → Variables in each project):
-#   DEPENDENCY_GOBLIN_TOKEN              PAT with api scope [masked] — see note below
-#                                         on why this is still needed for one call
+# Required CI/CD variables (Settings → CI/CD → Variables in each project,
+# or inherited from a group if set there — see note below):
+#   DEPENDENCY_GOBLIN_TOKEN              Token with api scope [masked] — see note below
 #   DEPENDENCY_GOBLIN_NAME               Commit author/committer display name
 #   DEPENDENCY_GOBLIN_EMAIL              Commit author/committer email
 #   DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY    ASCII-armored private key, File-type variable
@@ -55,30 +55,31 @@
 #   DEPENDENCY_GOBLIN_GPG_FINGERPRINT    Full fingerprint of the above key [masked]
 #   DEPENDENCY_GOBLIN_GPG_PASSPHRASE     Passphrase for the above key [masked]
 #
-# Hybrid auth: all git push/fetch/delete (branch push, stale branch cleanup)
-# authenticate with GitLab's built-in $CI_JOB_TOKEN rather than a personal
-# access token, since every one of those operations targets $CI_PROJECT_PATH
-# — the same project the pipeline is already running in. $CI_JOB_TOKEN is
-# generated automatically per pipeline run with no membership to manage,
-# and needs at most a project-level Token Access setting enabled (Settings
-# → CI/CD → Token Access), not group-level admin rights.
+# All git push/fetch/delete and the merge-request creation API call
+# authenticate with DEPENDENCY_GOBLIN_TOKEN — a Group Access Token created
+# once at the top-level group containing every consuming project, rather
+# than a personal service account's PAT. A personal PAT required that
+# service account to be added as a member of every consuming project
+# individually (often blocked entirely if the account isn't searchable —
+# private profile, org-level membership restrictions, etc.); a Group
+# Access Token instead inherits access to every project under the group
+# automatically, the same way the GPG variables above can be set once at
+# the group level and inherited everywhere too — no per-project setup.
 #
-# The one exception is the merge-request *creation* API call in
-# create:merge-request, which still uses DEPENDENCY_GOBLIN_TOKEN. Job
-# tokens are only valid for a specific, GitLab-version-dependent allowlist
-# of API endpoints — separate from the git-level Token Access setting
-# above — and MR creation has historically sat outside that allowlist on
-# a lot of GitLab versions/tiers (surfaces as a 401, not a 403, since
-# it's "this credential isn't accepted here" rather than "you don't have
-# permission"). Using DEPENDENCY_GOBLIN_TOKEN there still requires its
-# service account to be a member of every consuming project — same
-# scaling problem as before, just narrowed to this one API call instead
-# of every git operation. The real fix for that remaining gap is a Group
-# Access Token created once at the top-level group containing every
-# consuming project (requires group Owner rights to set up) — swap it in
-# for DEPENDENCY_GOBLIN_TOKEN here once it exists, and it'll cover every
-# consuming project automatically the same way $CI_JOB_TOKEN already does
-# for git, without per-project service-account membership.
+# This file went through an intermediate version that used GitLab's
+# built-in $CI_JOB_TOKEN for git operations instead, specifically to
+# avoid the per-project service-account membership problem. That's a
+# dead end: GitLab intentionally does not trigger CI/CD pipelines for
+# pushes authenticated with a job token, to prevent infinite pipeline-
+# triggering-pipeline loops — see
+# https://docs.gitlab.com/ci/jobs/ci_job_token/. That silently broke
+# downstream validation pipelines from running against fix branches/MRs
+# this pipeline creates. A Group Access Token resolves both problems at
+# once: it's a real authenticated identity (so pushes trigger pipelines
+# normally), and it scales across every consuming project without
+# per-project setup (so it doesn't reintroduce the original scaling
+# problem either). $CI_JOB_TOKEN is intentionally not used anywhere in
+# this file for that reason.
 #
 # Commit authorship ("Dependency Goblin") and GPG signing are unaffected
 # by any of the above — both are independent of which credential
@@ -821,7 +822,7 @@ fix-frontend:
 
     # Git identity and commit signing are configured in before_script.
     # Only the token-based remote auth is specific to this job.
-    - git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+    - git remote set-url origin "https://oauth2:${DEPENDENCY_GOBLIN_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
 
     # Create or reuse the remediation branch.
     - |
@@ -943,7 +944,7 @@ fix-backend-python:
 
       echo "=== Committing build.gradle changes ==="
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
-      git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git remote set-url origin "https://oauth2:${DEPENDENCY_GOBLIN_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
 
       # If fix-frontend already created this branch, check it out instead
       # of trying to create it again.
@@ -989,7 +990,7 @@ fix-backend-gradle:
   script:
     - |
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
-      git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git remote set-url origin "https://oauth2:${DEPENDENCY_GOBLIN_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
     - |
       FIX_BRANCH="auto-fix-vuln-remediation-$CI_PIPELINE_ID"
       git fetch origin
@@ -1047,7 +1048,7 @@ create:merge-request:
       git config --global --add safe.directory /builds/$CI_PROJECT_PATH
       git config --global user.email "$DEPENDENCY_GOBLIN_EMAIL"
       git config --global user.name "$DEPENDENCY_GOBLIN_NAME"
-      git remote set-url origin "https://gitlab-ci-token:${CI_JOB_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
+      git remote set-url origin "https://oauth2:${DEPENDENCY_GOBLIN_TOKEN}@$CI_SERVER_HOST/$CI_PROJECT_PATH.git"
       git fetch origin
 
       # Fetch all remote branches matching the prefix using git ls-remote,
@@ -1067,10 +1068,9 @@ create:merge-request:
           echo "  Deleting: $branch"
           # Best-effort: branch cleanup is housekeeping, not this job's
           # actual purpose (opening the MR). A push --delete failure here
-          # (e.g. CI_JOB_TOKEN having push but not delete permission —
-          # deletion is commonly a higher bar than push) shouldn't be
-          # allowed to kill the whole job under set -e before it ever
-          # gets to the MR creation below.
+          # (e.g. a branch protection rule requiring a higher role to
+          # delete than to push) shouldn't be allowed to kill the whole
+          # job under set -e before it ever gets to the MR creation below.
           if git push origin --delete "$branch" 2>&1; then
             echo "  Deleted successfully."
           else
