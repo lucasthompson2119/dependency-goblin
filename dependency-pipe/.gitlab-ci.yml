@@ -45,31 +45,44 @@
 #   create:merge-request    open an MR from the fix branch to default branch
 #
 # Required CI/CD variables (Settings → CI/CD → Variables in each project):
-#   DEPENDENCY_GOBLIN_NAME              Commit author/committer display name
-#   DEPENDENCY_GOBLIN_EMAIL             Commit author/committer email
-#   DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY   ASCII-armored private key, File-type variable
-#                                        (passed straight to `gpg --import` as a path,
-#                                        matching deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY)
-#   DEPENDENCY_GOBLIN_GPG_FINGERPRINT   Full fingerprint of the above key [masked]
-#   DEPENDENCY_GOBLIN_GPG_PASSPHRASE    Passphrase for the above key [masked]
+#   DEPENDENCY_GOBLIN_TOKEN              PAT with api scope [masked] — see note below
+#                                         on why this is still needed for one call
+#   DEPENDENCY_GOBLIN_NAME               Commit author/committer display name
+#   DEPENDENCY_GOBLIN_EMAIL              Commit author/committer email
+#   DEPENDENCY_GOBLIN_GPG_PRIVATE_KEY    ASCII-armored private key, File-type variable
+#                                         (passed straight to `gpg --import` as a path,
+#                                         matching deploy.sh's CLUSTERVERSE_GPG_PRIVATE_KEY)
+#   DEPENDENCY_GOBLIN_GPG_FINGERPRINT    Full fingerprint of the above key [masked]
+#   DEPENDENCY_GOBLIN_GPG_PASSPHRASE     Passphrase for the above key [masked]
 #
-# All git push/fetch and GitLab API calls (branch push, MR creation, stale
-# branch cleanup) authenticate with GitLab's built-in $CI_JOB_TOKEN rather
-# than a personal access token, since every one of those operations targets
-# $CI_PROJECT_PATH — the same project the pipeline is already running in.
-# $CI_JOB_TOKEN is generated automatically per pipeline run with no
-# membership to manage, so this file works in any consuming project with
-# no per-project setup beyond the CI/CD variables above. This file
-# previously used a DEPENDENCY_GOBLIN_TOKEN PAT tied to a dedicated
-# service account instead, which required that account to be added as a
-# member of every consuming project individually — DEPENDENCY_GOBLIN_TOKEN
-# is no longer used anywhere in this file and can be retired if nothing
-# else depends on it. Commit authorship ("Dependency Goblin") and GPG
-# signing are unaffected by this — both are independent of which
-# credential authenticates the push/API call. If a consuming project has
-# CI/CD job token push or API access restricted (Settings → CI/CD →
-# Token Access), that's a project-level Maintainer/Owner setting to
-# enable, not something requiring group-level admin rights.
+# Hybrid auth: all git push/fetch/delete (branch push, stale branch cleanup)
+# authenticate with GitLab's built-in $CI_JOB_TOKEN rather than a personal
+# access token, since every one of those operations targets $CI_PROJECT_PATH
+# — the same project the pipeline is already running in. $CI_JOB_TOKEN is
+# generated automatically per pipeline run with no membership to manage,
+# and needs at most a project-level Token Access setting enabled (Settings
+# → CI/CD → Token Access), not group-level admin rights.
+#
+# The one exception is the merge-request *creation* API call in
+# create:merge-request, which still uses DEPENDENCY_GOBLIN_TOKEN. Job
+# tokens are only valid for a specific, GitLab-version-dependent allowlist
+# of API endpoints — separate from the git-level Token Access setting
+# above — and MR creation has historically sat outside that allowlist on
+# a lot of GitLab versions/tiers (surfaces as a 401, not a 403, since
+# it's "this credential isn't accepted here" rather than "you don't have
+# permission"). Using DEPENDENCY_GOBLIN_TOKEN there still requires its
+# service account to be a member of every consuming project — same
+# scaling problem as before, just narrowed to this one API call instead
+# of every git operation. The real fix for that remaining gap is a Group
+# Access Token created once at the top-level group containing every
+# consuming project (requires group Owner rights to set up) — swap it in
+# for DEPENDENCY_GOBLIN_TOKEN here once it exists, and it'll cover every
+# consuming project automatically the same way $CI_JOB_TOKEN already does
+# for git, without per-project service-account membership.
+#
+# Commit authorship ("Dependency Goblin") and GPG signing are unaffected
+# by any of the above — both are independent of which credential
+# authenticates the push/API call.
 #
 # None of the above needs (or should get) re-declared in a top-level
 # variables: block. Project/group CI/CD variables are already injected
@@ -1052,8 +1065,17 @@ create:merge-request:
         echo "$STALE_BRANCHES"
         echo "$STALE_BRANCHES" | while IFS= read -r branch; do
           echo "  Deleting: $branch"
-          git push origin --delete "$branch"
-          echo "  Deleted successfully."
+          # Best-effort: branch cleanup is housekeeping, not this job's
+          # actual purpose (opening the MR). A push --delete failure here
+          # (e.g. CI_JOB_TOKEN having push but not delete permission —
+          # deletion is commonly a higher bar than push) shouldn't be
+          # allowed to kill the whole job under set -e before it ever
+          # gets to the MR creation below.
+          if git push origin --delete "$branch" 2>&1; then
+            echo "  Deleted successfully."
+          else
+            echo "  WARNING: could not delete stale branch '$branch' (continuing without blocking MR creation)"
+          fi
         done
       fi
 
@@ -1134,7 +1156,7 @@ create:merge-request:
       if RESPONSE="$(curl --show-error \
         --cacert /etc/ssl/custom/dod-ca-bundle.pem \
         --request POST \
-        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --header "PRIVATE-TOKEN: ${DEPENDENCY_GOBLIN_TOKEN}" \
         --data "source_branch=${FIX_BRANCH}" \
         --data "target_branch=${CI_DEFAULT_BRANCH}" \
         --data "title=${MR_TITLE}" \
