@@ -165,7 +165,7 @@
 # =============================================================================
 
 .gradle-dep:
-  image: $CI_BASE_IMAGE_JDK_21
+  image: 421584343086.dkr.ecr.us-gov-west-1.amazonaws.com/1-platform-images/chainguard/jdk-fips-gpg:openjdk-21-dev
   variables:
     ALLOW_EMPTY_PASSWORD: "yes"
     KEYSTORE: /usr/lib/jvm/default-jvm/lib/security/cacerts
